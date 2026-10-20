@@ -2,7 +2,106 @@
 
 ## Agent handoff / active work (2026-10-20, latest)
 
-### >>> ACTIVE: port iOS to ugglite; verify the post-MMU framebuffer path <<<
+### >>> ACTIVE: root cause of the post-MMU hang FOUND in QEMU; patch 0088 ready for CI <<<
+
+**Read this section first. It supersedes the 0087 "panel observation pending"
+state below, which is now resolved.**
+
+QEMU now reproduces the hardware failure exactly, and it names the fault:
+with the 0087 kernel at its configured `phys_base`, the first fetch after
+`MSR SCTLR_EL1` takes an **instruction abort, ESR `0x86000004` = translation
+fault at level 0**, `FAR = ELR = 0xfffffe0007a72abc` (`_arm_init`). That is
+the "row-160 stripe never appears" symptom on the phone. Three defects cause
+it; all three are fixed in patch 0088.
+
+**How to reproduce (no phone, ~30 s):**
+
+    python3 tools/qemu-ugglite.py shim/out/payload-0088.bin /tmp/q --secs 12
+    python3 tools/qemu-ugglite.py shim/out/payload-0088.bin /tmp/q --secs 12 \
+        --patch-0088 0xfffffe0007174a10      # rewrites the prebuilt kernel
+
+Without `--patch-0088` the run reports `did_not_reach_arm_init` and the
+`0x86000004` abort. With it, `arm_init()` runs and paints the panel: the
+harness reports `arm_init_green_pct ~77-82` and
+`status: reached_arm_init`. gdb: `--gdb 1234` starts QEMU halted with a stub;
+the recipe is in the tool's docstring.
+
+**The three defects (each independently proven necessary by QEMU):**
+
+1. **T0SZ/T1SZ were 23, but the tables are built for a 48-bit VA.**
+   `start.s`'s `create_l0_table_entry` masks with `ARM_TT_L0_INDEX_MASK`
+   (bits 47:39, a 9-bit L0 index), and so does `pmap_table_level_info_4k[]`.
+   `T1SZ=23` is a 41-bit VA, whose hardware L0 index is only `VA[40:39]`
+   (2 bits), so every bootstrap entry is written at index 0x1fc while the
+   walk reads index 0. Result: level-0 translation fault on the first fetch.
+   Patch 0088 sets **T0SZ = T1SZ = 16** (48-bit, 9-bit L0 index). The
+   resulting `TCR_EL1` is `0x22a5102510`; recomputing it from the patched
+   macros gives the same value, and that is the value QEMU validated.
+   `pta_root_level = (T0SZ_BOOT - 16) / 9` stays 0 either way, so pmap's
+   root is still L0 - but now the index width agrees.
+   *(This corrects 0086/0087, which chose 23 to fit `VM_KERNEL_LINK_ADDRESS`
+   into the TTBR1 region. 16 also contains it, with room to spare: the TTBR1
+   base is 0xffff000000000000 and the link address is 0xfffffe0007004000.)*
+
+2. **Marker 1 clobbered `x14`, the KVA virtual cursor.**
+   `mov x14, x22` / `mov x15, x23` set the KVA cursors; the diagnostic marker
+   between the V=P mapping and the KVA `create_bootstrap_mapping` used `w14`
+   as pixel scratch, leaving `x14 = 0xff`. QEMU shows `x14=0xff` at the KVA
+   call site (it should be `0xfffffe0007004000`), so the KVA bootstrap
+   mapping was built from VA 0xff and the kernel's own link range was never
+   mapped. All 11 Ugglite marker blocks now use **`w16`** (verified unused
+   anywhere in `start.s`). This is why 0085-0087 could never work even with
+   the right TCR: the markers were eating the state they were diagnosing.
+
+3. **825 LSE atomic instructions on a core that has none.**
+   `-march=armv8-a` is not sufficient with Apple clang: `__c11_atomic_*`
+   (which `os_atomic_*` lowers to via `<stdatomic.h>`) still emits
+   `ldadd`/`ldclr`/`ldset`/`swp`. The A53 is ARMv8.0, `ID_AA64ISAR0_EL1[23:20]
+   = 0`, so these are UNDEFINED. Reproduced on the host with a 6-line C file
+   under `-mkernel -march=armv8-a`; `-mcpu=cortex-a53` emits `ldaxr/stxr`
+   instead. QEMU's A53 model traps at `_lck_grp_reference+0x8`
+   (`ldadd w8, w8, [x1]`), the first one reached. `MACHINE_FLAGS_ARM64_UGGLITE`
+   now uses **`-mcpu=cortex-a53`**. This is a *second, independent* blocker
+   that would have stopped the boot right after `arm_init` started.
+
+**Also fixed: `phys_base` must be 2 MiB aligned.** `start.s` maps the kernel
+with 2 MiB L2 blocks and masks the physical address with
+`ARM_TTE_BLOCK_L2_MASK` (0xffffffe00000). The old `0x8d500000` is not aligned,
+so it was silently rounded to `0x8d400000` - the V=P mapping pointed 1 MiB
+below the real kernel. QEMU: `0x8d500000` fails, while `0x8d600000`,
+`0x8d800000`, `0x8da00000` and `0x8dc00000` all reach `arm_init`.
+`tools/mkadt.py --ugglite` now uses `0x8d600000` + 554 MiB (still above the
+wcnss_fw carve-out ending at 0x8d500000 and below ramoops at 0xb0000000).
+`tools/qemu-ugglite.py` refuses an unaligned base unless `--allow-unaligned`.
+
+**State of the artifacts (all local, none committed as binaries):**
+`shim/out/ugglite-0088.adt` (regenerated, dram-base 0x8d600000) and
+`shim/out/payload-0088.bin` (from the 0087 kernel + that ADT, same cmdline).
+**The kernel binary is still the 0087 build**: it predates patch 0088, so
+`tools/qemu-ugglite.py --patch-0088` rewrites the two edited instructions in
+the image to emulate the patch. A real CI build of 0088 has NOT been run yet.
+
+**NEXT CONCRETE ACTION:** dispatch a CI build of patch 0088
+(`gh workflow run xnu.yml -R cuwayo/ios-ugglite -f machine_config=UGGLITE`),
+then (a) confirm the 0088 binary contains **zero** LSE mnemonics
+(`llvm-objdump -d ... | grep -cE 'ldadd|ldclr|ldeor|ldset|swp'`) and reads
+`TCR_EL1 = 0x22a5102510` at `sysreg_restore`, and (b) run it in QEMU with
+`tools/qemu-ugglite.py` (no `--patch-0088`) expecting `reached_arm_init`.
+Only then rebuild the temporary `fastboot boot` image and ask the user for the
+panel observation.
+
+**What QEMU says comes next (not yet fixed).** With the three fixes applied,
+the first exception is a **Data Abort at `FAR 0x220`, ESR `0x96000005`**
+(translation fault, level 1) from `ELR 0xfffffe000691a7f4`, followed by a
+stream of Undefined Instructions. `0x220` is inside the *device tree*
+(ADT) header area, and `0xfffffe000691a7f4` is below `__mh_execute_header`
+(0xfffffe0007004000), i.e. outside the kernel image - so the kernel is
+dereferencing a bad pointer out of the ADT/boot_args rather than executing
+its own code. That is the next thing to chase; it is no longer the MMU.
+`arm_init`'s stage-1 green fill and stage-2 marker are both on the panel, so
+`PE_init_platform` is being entered around this point.
+
+### >>> HISTORICAL: 0087 built and booted, panel observation pending <<<
 
 The project goal is to boot iOS on the Redmi Note 5A (`ugglite`). The phone is
 now executing the temporary 0085 diagnostic image after an ADB reboot from
@@ -201,16 +300,25 @@ actually does, so the next session does not have to rediscover it:
   `BOOTSTRAP_TABLE_SIZE` (8 pages for 4K).
 - The MMU is enabled later, at `MSR_SCTLR_EL1_X0` with `SCTLR_EL1_DEFAULT =
   0x3414513d`. SWEET is exempt from the `cmp SCTLR/bne .` self-check.
-- **`TCR_TBI0_TOPBYTE_IGNORED` (bit 37) is set unconditionally** in
-  `osfmk/arm64/proc_reg.h`. TBI is ARMv8.1+; the A53 reports
-  `ID_AA64ISAR0_EL1[23:20] = 0`, i.e. **no TBI**. So the kernel programs a
-  RES0 bit and relies on top-byte-ignore semantics it does not have. This is
-  the leading suspect after the page tables: it changes how the `0xfffffe...`
-  kernel VAs translate. A guarded fix is prepared (clear the bit for
-  `BOARD_UGGLITE`) but was NOT applied until the marker shows the hang is past
-  the page-table construction.
+- ~~**`TCR_TBI0_TOPBYTE_IGNORED` (bit 37) is set unconditionally** ...
+  TBI is ARMv8.1+; the A53 reports `ID_AA64ISAR0_EL1[23:20] = 0`, i.e. **no
+  TBI**.~~ **THIS DIAGNOSIS WAS WRONG (corrected 2026-10-20).**
+  `ID_AA64ISAR0_EL1[23:20]` is the **Atomics (LSE)** field, not TBI.
+  TBI0/TBI1 (`TCR_EL1` bits 37/38) exist since ARMv8.0 and are implemented by
+  the Cortex-A53; programming `TCR_TBI0_TOPBYTE_IGNORED` is legal there.
+  (The LSE reading is the useful one: field = 0 means no LSE atomics, which is
+  the real defect described in defect 3 of the active section - see patch
+  0088. The same register was misread in the opposite direction.)
+  **Do NOT apply the "clear TBI for `BOARD_UGGLITE`" fix** - it would have
+  removed top-byte-ignore from a core that implements it, and it was never
+  the cause. The real hang was the T0SZ/T1SZ geometry, the marker clobbering
+  `x14`, and LSE atomics.
+  Low-risk hardening that *is* still worth doing: OR the ARMv8.0 RES1 bits
+  `0x30D00800` into `SCTLR_EL1_DEFAULT` (0x3414513d currently has bits 11, 22
+  and 23 clear). Not applied yet; unrelated to the hang.
 
-**NEXT CONCRETE ACTION:** work out what `start.s` computes for the bootstrap
+**NEXT CONCRETE ACTION (superseded - see the active section at the top of this
+file):** work out what `start.s` computes for the bootstrap
 mapping and compare it against the ADT. The useful inputs are
 `VM_KERNEL_LINK_ADDRESS`, `boot_args->memSize`, `physBase`, `topOfKernelData`
 and `_mh_execute_header`. Two candidate fixes to evaluate: (a) make the ADT's

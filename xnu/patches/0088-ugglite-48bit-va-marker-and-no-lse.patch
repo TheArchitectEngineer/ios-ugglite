@@ -1,0 +1,226 @@
+--- a/osfmk/arm64/proc_reg.h
++++ b/osfmk/arm64/proc_reg.h
+@@ -951,7 +951,21 @@
+ #endif /* !__ARM64_PMAP_SUBPAGE_L1__ */
+ #else /* __ARM_16K_PG__ */
+ #if defined(UGGLITE)
+-#define T0SZ_BOOT 23ULL
++/*
++ * Ugglite is a 4K-granule build on a Cortex-A53, so the translation walk
++ * must use the standard 48-bit/4-level geometry: T0SZ=16 gives a 48-bit VA
++ * whose level-0 index is VA[47:39] (9 bits).
++ *
++ * This is not a free choice. pmap_table_level_info_4k[] indexes with the
++ * fixed ARM_4K_TT_L0_INDEX_MASK (bits 47:39), and start.s's
++ * create_l0_table_entry uses the same mask, so the hardware walk and the
++ * software that fills the tables must agree on a 9-bit L0 index. A smaller
++ * TSZ (e.g. 23, a 41-bit VA) narrows the hardware L0 index to VA[40:39]
++ * (2 bits) while the software keeps writing at index VA[47:39], so every
++ * bootstrap entry lands at the wrong index and the first fetch after
++ * MSR SCTLR_EL1 takes a level-0 translation fault.
++ */
++#define T0SZ_BOOT 16ULL
+ #elif __ARM64_PMAP_SUBPAGE_L1__
+ #define T0SZ_BOOT 26ULL
+ #else /* __ARM64_PMAP_SUBPAGE_L1__ */
+@@ -972,11 +986,12 @@
+ #else /* __ARM_16K_PG__ */
+ #if defined(UGGLITE)
+ /*
+- * VM_KERNEL_LINK_ADDRESS is 0xfffffe0000000000.  Both 4K translation regions
+- * therefore need level-0 roots (TSZ=23), rather than the generic 256GB L1
+- * configuration. Keeping T0SZ and T1SZ equal also matches pmap geometry.
++ * Same 48-bit/4-level geometry as T0SZ above, so TTBR1 walks with a 9-bit
++ * L0 index. VM_KERNEL_LINK_ADDRESS (0xfffffe0007004000) lies inside the
++ * TTBR1 region for T1SZ=16 (base 0xffff000000000000). Keeping T1SZ equal to
++ * T0SZ also keeps kernel_pmap->min in step with the link address.
+  */
+-#define T1SZ_BOOT 23ULL
++#define T1SZ_BOOT 16ULL
+ #elif __ARM64_PMAP_SUBPAGE_L1__
+ #define T1SZ_BOOT 26ULL
+ #else /* __ARM64_PMAP_SUBPAGE_L1__ */
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -594,10 +594,10 @@
+ 	mov		x12, #16
+ 2:	mov		x13, #720
+ 1:	strb	w11, [x10], #1
+-	lsr		w14, w11, #8
+-	strb	w14, [x10], #1
+-	lsr		w14, w11, #16
+-	strb	w14, [x10], #1
++	lsr		w16, w11, #8
++	strb	w16, [x10], #1
++	lsr		w16, w11, #16
++	strb	w16, [x10], #1
+ 	subs	x13, x13, #1
+ 	b.ne	1b
+ 	subs	x12, x12, #1
+@@ -758,10 +758,10 @@
+ 	mov		x12, #16
+ 2:	mov		x13, #720
+ 1:	strb	w11, [x10], #1
+-	lsr		w14, w11, #8
+-	strb	w14, [x10], #1
+-	lsr		w14, w11, #16
+-	strb	w14, [x10], #1
++	lsr		w16, w11, #8
++	strb	w16, [x10], #1
++	lsr		w16, w11, #16
++	strb	w16, [x10], #1
+ 	subs	x13, x13, #1
+ 	b.ne	1b
+ 	subs	x12, x12, #1
+@@ -785,10 +785,10 @@
+ 	mov		x12, #16
+ 2:	mov		x13, #720
+ 1:	strb	w11, [x10], #1
+-	lsr		w14, w11, #8
+-	strb	w14, [x10], #1
+-	lsr		w14, w11, #16
+-	strb	w14, [x10], #1
++	lsr		w16, w11, #8
++	strb	w16, [x10], #1
++	lsr		w16, w11, #16
++	strb	w16, [x10], #1
+ 	subs	x13, x13, #1
+ 	b.ne	1b
+ 	subs	x12, x12, #1
+@@ -842,10 +842,10 @@
+ 	mov		x12, #16
+ 2:	mov		x13, #720
+ 1:	strb	w11, [x10], #1
+-	lsr		w14, w11, #8
+-	strb	w14, [x10], #1
+-	lsr		w14, w11, #16
+-	strb	w14, [x10], #1
++	lsr		w16, w11, #8
++	strb	w16, [x10], #1
++	lsr		w16, w11, #16
++	strb	w16, [x10], #1
+ 	subs	x13, x13, #1
+ 	b.ne	1b
+ 	subs	x12, x12, #1
+@@ -894,10 +894,10 @@
+ 	mov		x12, #16
+ 2:	mov		x13, #720
+ 1:	strb	w11, [x10], #1
+-	lsr		w14, w11, #8
+-	strb	w14, [x10], #1
+-	lsr		w14, w11, #16
+-	strb	w14, [x10], #1
++	lsr		w16, w11, #8
++	strb	w16, [x10], #1
++	lsr		w16, w11, #16
++	strb	w16, [x10], #1
+ 	subs	x13, x13, #1
+ 	b.ne	1b
+ 	subs	x12, x12, #1
+@@ -934,10 +934,10 @@
+ 	mov		x12, #16
+ 2:	mov		x13, #720
+ 1:	strb	w11, [x10], #1
+-	lsr		w14, w11, #8
+-	strb	w14, [x10], #1
+-	lsr		w14, w11, #16
+-	strb	w14, [x10], #1
++	lsr		w16, w11, #8
++	strb	w16, [x10], #1
++	lsr		w16, w11, #16
++	strb	w16, [x10], #1
+ 	subs	x13, x13, #1
+ 	b.ne	1b
+ 	subs	x12, x12, #1
+@@ -973,10 +973,10 @@
+ 	mov		x12, #16
+ 2:	mov		x13, #720
+ 1:	strb	w11, [x10], #1
+-	lsr		w14, w11, #8
+-	strb	w14, [x10], #1
+-	lsr		w14, w11, #16
+-	strb	w14, [x10], #1
++	lsr		w16, w11, #8
++	strb	w16, [x10], #1
++	lsr		w16, w11, #16
++	strb	w16, [x10], #1
+ 	subs	x13, x13, #1
+ 	b.ne	1b
+ 	subs	x12, x12, #1
+@@ -995,10 +995,10 @@
+ 	mov		x12, #16
+ 2:	mov		x13, #720
+ 1:	strb	w11, [x10], #1
+-	lsr		w14, w11, #8
+-	strb	w14, [x10], #1
+-	lsr		w14, w11, #16
+-	strb	w14, [x10], #1
++	lsr		w16, w11, #8
++	strb	w16, [x10], #1
++	lsr		w16, w11, #16
++	strb	w16, [x10], #1
+ 	subs	x13, x13, #1
+ 	b.ne	1b
+ 	subs	x12, x12, #1
+@@ -1035,10 +1035,10 @@
+ 	mov		x12, #16
+ 2:	mov		x13, #720
+ 1:	strb	w11, [x10], #1
+-	lsr		w14, w11, #8
+-	strb	w14, [x10], #1
+-	lsr		w14, w11, #16
+-	strb	w14, [x10], #1
++	lsr		w16, w11, #8
++	strb	w16, [x10], #1
++	lsr		w16, w11, #16
++	strb	w16, [x10], #1
+ 	subs	x13, x13, #1
+ 	b.ne	1b
+ 	subs	x12, x12, #1
+@@ -1098,10 +1098,10 @@
+ 	mov		x12, #16
+ 2:	mov		x13, #720
+ 1:	strb	w11, [x10], #1
+-	lsr		w14, w11, #8
+-	strb	w14, [x10], #1
+-	lsr		w14, w11, #16
+-	strb	w14, [x10], #1
++	lsr		w16, w11, #8
++	strb	w16, [x10], #1
++	lsr		w16, w11, #16
++	strb	w16, [x10], #1
+ 	subs	x13, x13, #1
+ 	b.ne	1b
+ 	subs	x12, x12, #1
+@@ -1117,10 +1117,10 @@
+ 	mov		x12, #16
+ 2:	mov		x13, #720
+ 1:	strb	w11, [x10], #1
+-	lsr		w14, w11, #8
+-	strb	w14, [x10], #1
+-	lsr		w14, w11, #16
+-	strb	w14, [x10], #1
++	lsr		w16, w11, #8
++	strb	w16, [x10], #1
++	lsr		w16, w11, #16
++	strb	w16, [x10], #1
+ 	subs	x13, x13, #1
+ 	b.ne	1b
+ 	subs	x12, x12, #1
+--- a/makedefs/MakeInc.def
++++ b/makedefs/MakeInc.def
+@@ -62,7 +62,13 @@
+ MACHINE_FLAGS_ARM64_VMAPPLE = -DARM64_BOARD_CONFIG_VMAPPLE              -march=armv8.5a
+ MACHINE_FLAGS_ARM64_BCM2837 = -DARM64_BOARD_CONFIG_BCM2837
+ MACHINE_FLAGS_ARM64_SWEET = -DARM64_BOARD_CONFIG_SWEET                -march=armv8.2-a+crypto
+-MACHINE_FLAGS_ARM64_UGGLITE = -DARM64_BOARD_CONFIG_UGGLITE -DBOARD_UGGLITE -DUGG_FAMILY -march=armv8-a
++# Cortex-A53 is ARMv8.0: it has no LSE atomics (ID_AA64ISAR0_EL1[23:20] = 0),
++# so ldadd/ldclr/ldset/swp are UNDEFINED there. -march=armv8-a alone is NOT
++# enough: with Apple clang and -mkernel, __c11_atomic_* still lower to LSE and
++# the 0087 kernel shipped 825 such instructions (QEMU on cortex-a53 raises
++# "Undefined Instruction" at _lck_grp_reference+0x8, the first one executed).
++# -mcpu=cortex-a53 makes the backend emit the LL/SC pair (ldaxr/stxr) instead.
++MACHINE_FLAGS_ARM64_UGGLITE = -DARM64_BOARD_CONFIG_UGGLITE -DBOARD_UGGLITE -DUGG_FAMILY -mcpu=cortex-a53
+ 
+ 
+ #
