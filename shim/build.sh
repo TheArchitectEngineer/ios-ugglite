@@ -25,13 +25,19 @@ ugglite)
 	BOARD_DEFS="-DBOARD_UGGLITE"
 	DTB="${DTB:-../dtb/ugglite.dtb}"
 	;;
+qemu)
+	BOARD_DEFS="-DBOARD_QEMU"
+	DTB="${DTB:-}"
+	;;
 *)
-	echo "error: unknown board '$BOARD' (sweet|ugglite)" >&2
+	echo "error: unknown board '$BOARD' (sweet|ugglite|qemu)" >&2
 	exit 1
 	;;
 esac
 
-CFLAGS="-O2 -ffreestanding -nostdlib -fno-pic -fno-jump-tables -mgeneral-regs-only -mstrict-align -fno-stack-protector -Wall -Wextra $BOARD_DEFS"
+# EXTRA_CFLAGS lets a harness override board constants, e.g.
+#   EXTRA_CFLAGS=-DFB_PHYS=0x60000000 ./build.sh "" qemu
+CFLAGS="-O2 -ffreestanding -nostdlib -fno-pic -fno-jump-tables -mgeneral-regs-only -mstrict-align -fno-stack-protector -Wall -Wextra $BOARD_DEFS ${EXTRA_CFLAGS:-}"
 
 if command -v aarch64-linux-gnu-gcc >/dev/null; then
 	CC=aarch64-linux-gnu-gcc
@@ -76,6 +82,13 @@ if [ -n "$PAYLOAD" ]; then
 	cp "$PAYLOAD" out/ramdisk.bin
 else
 	(cd out && rm -rf rd && mkdir rd && cd rd && find . | cpio -o -H newc --quiet | gzip -9 > ../ramdisk.bin)
+fi
+
+# QEMU loads the raw Image itself; every phone target needs a boot.img.
+if [ "$BOARD" = qemu ]; then
+	cp out/Image out/shim-qemu.img
+	ls -l out/shim-qemu.img
+	exit 0
 fi
 
 [ -f "$DTB" ] || { echo "error: DTB not found: $DTB (set DTB=...)" >&2; exit 1; }

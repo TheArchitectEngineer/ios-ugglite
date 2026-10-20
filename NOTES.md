@@ -84,6 +84,25 @@ byte-identical to the input) and the ARM64 Image header decoded (`b _start`,
 magic `ARM\x64`, image_size 0x2d000). **NOT booted on the ugglite: no hardware
 test has been done, and QEMU is not installed on this laptop.**
 
+**QEMU rehearsal 2026-10-20 (qemu 11.1.2, installed at user request):** added a
+third board profile `-DBOARD_QEMU` (GICv2 like ugglite, RAM at 0x40000000, no
+Qualcomm restart registers - `reset()` skips them when they are 0) and
+`tools/qemu-probe.py`, which builds the probe, dumps QEMU's own device tree,
+places it where the shim expects `x0` (a 2-instruction stub, because QEMU's
+loader device cannot set x0), boots, and decodes the panel text with the shim's
+font. Results on emulated hardware:
+- `cortex-a53`: `MMFR0 0x00001122`, `ID: 16K NOT SUPPORTED`, AT16K skipped,
+  verdict `4K CPU: XNU needs mixed page sizes`.
+- `cortex-a76`: `AT16K par=0x40203b00 fail=0`, verdict `16K granule usable`.
+- `AT4K par=0x40203b00 fail=0` in both; decoding PAR_EL1 gives PA `0x40203000`,
+  which is `probe_main & ~0xfff` - so the page tables and the AT mechanism are
+  genuinely correct, not a false pass.
+- The FDT walker parsed a live `linux,dummy-virt` tree: model, `/memory`
+  (`lo=40000000 sz=80000000`), CPU count, GICv2 arch rev 2. No guest errors in
+  `qemu.log`.
+This is the same verdict expected from the real MSM8917, since QEMU's A53 model
+reports the same ID_AA64MMFR0 value.
+
 **NEXT (in order):**
 1. `fastboot boot shim/out/shim-boot-ugglite.img` on the Note 5A with the phone
    in fastboot. Expected: red "SHIM ugglite loader + board probe" screen, then

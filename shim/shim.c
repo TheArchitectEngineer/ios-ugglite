@@ -112,10 +112,13 @@ static void __attribute__((noreturn)) reset(unsigned after_s)
 	con_skip();
 	con_str("RESET", after_s > 20 ? "in 40s" : "in 20s");
 	delay_ms(after_s * 1000);
-	wr32(IMEM_RESTART_REASON, RESTART_BOOTLOADER);
+	/* Boards without the Qualcomm restart registers (QEMU) define these 0. */
+	if (IMEM_RESTART_REASON)
+		wr32(IMEM_RESTART_REASON, RESTART_BOOTLOADER);
 	__asm__ volatile("dsb sy" ::: "memory");
 	smc(PSCI_SYSTEM_RESET, 0, 0, 0);
-	wr32(PSHOLD_PHYS, 0);
+	if (PSHOLD_PHYS)
+		wr32(PSHOLD_PHYS, 0);
 	for (;;)
 		__asm__ volatile("wfe");
 }
@@ -412,8 +415,8 @@ void shim_main(uint64_t dtb)
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
 	stage = "loader";
 	con_clear(RED);
-#if defined(BOARD_UGGLITE)
-	con_str("SHIM", "ugglite loader + board probe");
+#if defined(BOARD_HAS_PROBE)
+	con_str("SHIM", BOARD_NAME " loader + board probe");
 #else
 	con_str("SHIM", "sweet milestone 4: xnu loader");
 #endif
@@ -422,13 +425,13 @@ void shim_main(uint64_t dtb)
 	con_str("LOADER", why);
 	con_skip();
 
-#if defined(BOARD_UGGLITE)
+#if defined(BOARD_HAS_PROBE)
 	/*
-	 * ugglite bring-up: no payload means "characterise this board". The
+	 * Bring-up boards: no payload means "characterise this board". The
 	 * probe answers the granule question and dumps the live memory map, so
-	 * it is the first thing to run on the phone. A ramdisk without a
-	 * payload is the normal case here, so any of the loader's "nothing to
-	 * boot" answers falls through to the probe.
+	 * it is the first thing to run. A ramdisk without a payload is the
+	 * normal case here, so any of the loader's "nothing to boot" answers
+	 * falls through to the probe.
 	 */
 	if (why[0] == 'n' || why[0] == 'b') {
 		extern void probe_main(uint64_t dtb);

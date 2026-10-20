@@ -91,7 +91,33 @@ gdb -ex "set architecture aarch64" -ex "target remote localhost:1234"
 
 ---
 
-## 5. Output Artifacts
+## 5. Board probe without a phone
+
+`tools/qemu-probe.py` boots the shim's own board probe on QEMU `virt`, so the
+probe can be validated before it runs on hardware:
+
+```sh
+python3 tools/qemu-probe.py /tmp/qp --secs 12                    # cortex-a53
+python3 tools/qemu-probe.py /tmp/qp76 --secs 12 --cpu cortex-a76  # 16K-capable
+```
+
+It builds the shim with `-DBOARD_QEMU`, dumps QEMU's own device tree, places it
+where the shim expects the pointer in `x0`, and decodes the panel text with the
+shim's font into `fb.txt` (plus `fb.png`).
+
+QEMU `virt` is GICv2 here, like the ugglite target, so this exercises the same
+interrupt-controller path. Two useful checks:
+
+| CPU | Expected verdict |
+| --- | --- |
+| `cortex-a53` | `ID: 16K NOT SUPPORTED`, `AT16K` skipped, `4K CPU: XNU needs mixed page sizes` |
+| `cortex-a76` | `AT16K ... fail=0`, `16K granule usable` |
+
+`AT4K` should always report `fail=0`; its `PAR_EL1` decodes to the physical
+address of `probe_main`, which validates the page tables and the `AT`
+mechanism rather than just the CPU's ID register.
+
+## 6. Output Artifacts
 
 Inside the specified output directory:
 - `fb.png`: The exact 1080×2400 panel framebuffer output.

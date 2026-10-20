@@ -12,9 +12,48 @@
  * DTB #07 ("MSM8917-PMI8937 MTP", board-id <8 0>), which agree.
  */
 
-#if defined(BOARD_UGGLITE)
+#if defined(BOARD_QEMU)
+
+/*
+ * QEMU virt: a stand-in for an unknown board. It exists so the probe and the
+ * loader can be exercised end to end on the host before a phone boot. The
+ * memory layout is QEMU's (RAM at 0x40000000, GICv2 at 0x08000000) and the
+ * framebuffer is wherever the harness places it, which the runner passes in
+ * with -DFB_PHYS=... (default matches tools/qemu-sweet.py).
+ *
+ * GICv2 on purpose: the same driver path as ugglite.
+ */
+#define BOARD_NAME	"qemu-virt"
+#define BOARD_HAS_PROBE	1
+
+#ifndef FB_PHYS
+#define FB_PHYS		0x60000000UL
+#endif
+#define FB_PHYS_ALT	FB_PHYS
+#define FB_W		720
+#define FB_H		1280
+#define FB_BPP		4		/* the runner fills 32 bpp */
+#define FB_SCALE	2
+
+#define GICD_BASE	0x08000000UL
+#define GICC_BASE	0x08010000UL
+#define GIC_IS_V2	1
+
+/* No Qualcomm restart registers; reset() falls through to PSCI, which QEMU has. */
+#define PSHOLD_PHYS		0x0UL
+#define IMEM_RESTART_REASON	0x0UL
+#define IMEM_BASE		0x0UL
+
+#define TLMM_BASE	0x0UL
+
+#define VTIMER_INTID	27		/* QEMU virt wires the virt timer to PPI 11 */
+#define PTIMER_INTID	30
+#define SGI_INTID	1
+
+#elif defined(BOARD_UGGLITE)
 
 #define BOARD_NAME	"ugglite"
+#define BOARD_HAS_PROBE	1
 
 /*
  * reserved-memory splash_region. The mainline DTS puts the simple-framebuffer
