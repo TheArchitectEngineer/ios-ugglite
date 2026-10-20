@@ -22,6 +22,57 @@ def red(text): return f"\033[91m{text}\033[0m"
 def bold(text): return f"\033[1m{text}\033[0m"
 
 
+def check_hunk_counts(path):
+    """Verify every @@ header's line counts match its body.
+
+    This catches the failure mode that cost several CI runs: editing a patch
+    body without updating its hunk header produces a file that looks fine and
+    fails at `git apply` time with "corrupt patch".
+    """
+    import re
+    errors = []
+    lines = open(path, errors='replace').read().split('\n')
+    i = 0
+    while i < len(lines):
+        m = re.match(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@', lines[i])
+        if not m:
+            i += 1
+            continue
+        j = i + 1
+        old = new = 0
+        while j < len(lines):
+            t = lines[j]
+            if t.startswith('@@') or t.startswith('diff --git'):
+                break
+            if t.startswith('--- ') and j + 1 < len(lines) and lines[j + 1].startswith('+++ '):
+                break
+            if t == '':
+                # A blank line is only context inside a hunk; if the next
+                # non-blank line starts a new file, it is a separator.
+                k = j + 1
+                while k < len(lines) and lines[k] == '':
+                    k += 1
+                if k >= len(lines) or lines[k].startswith('diff --git'):
+                    break
+                old += 1; new += 1
+            elif t.startswith(' '):
+                old += 1; new += 1
+            elif t.startswith('-'):
+                old += 1
+            elif t.startswith('+'):
+                new += 1
+            else:
+                break
+            j += 1
+        want_old = int(m.group(2)) if m.group(2) else 1
+        want_new = int(m.group(4)) if m.group(4) else 1
+        if (old, new) != (want_old, want_new):
+            errors.append(f"{os.path.basename(path)}:{i+1}: header says "
+                          f"-{want_old} +{want_new}, body has -{old} +{new}")
+        i = j
+    return errors
+
+
 def validate_patches(verbose=False):
     patch_dir = os.path.join(REPO_ROOT, 'xnu/patches')
     patch_files = sorted(glob.glob(os.path.join(patch_dir, '*.patch')))
@@ -33,6 +84,8 @@ def validate_patches(verbose=False):
     seen_numbers = {}
 
     for path in patch_files:
+        for err in check_hunk_counts(path):
+            errors.append(err)
         fname = os.path.basename(path)
         m = re.match(r'^(\d{4})-(.+)\.patch$', fname)
         if not m:

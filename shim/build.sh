@@ -138,6 +138,16 @@ else
 		pad=$(( (16384 - (cur % 16384)) % 16384 ))
 		head -c "$pad" /dev/zero >> out/Image
 		cat out/payload-appended.bin >> out/Image
+		# image_size must describe the whole appended image, not just the
+		# shim: the header field is still _end from the link, and lk uses it
+		# to know how far the kernel extends.
+		python3 - "$(stat -c%s out/Image)" <<'PY'
+import struct, sys
+total = int(sys.argv[1])
+with open('out/Image', 'r+b') as f:
+    f.seek(8)
+    f.write(struct.pack('<Q', total))
+PY
 	fi
 	gzip -9 -n -c out/Image > out/kernel.gz
 	cp out/kernel.gz out/kernel-dtb
