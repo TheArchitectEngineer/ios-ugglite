@@ -349,6 +349,22 @@ boards differ in `UGGLITE.h`, not in the kernel option set). Rebuild is run
 
 Rebuild is run 39361391713.
 
+**Build 6: down to 2 undefined symbols - the SWEET_FAMILY problem
+(2026-10-20).** The link failed on exactly two symbols, `sweet_console_muted`
+(AppleCLCD) and `sweet_sample_task` (sampler). Both are defined in patches 0067
+and 0054 inside `#if defined(ARM64_BOARD_CONFIG_SWEET)`, and an UGGLITE build
+defines `ARM64_BOARD_CONFIG_UGGLITE`, so those files compiled their bodies out.
+**This is the general shape of the port: 39 patches guard their additions with
+a test for one specific board.**
+
+Fix: `board_config.h` defines **`SWEET_FAMILY`** for both boards and the guards
+test that instead - 39 sites across 0016-0080, including the *inverse* checks in
+0059 (`XNU_TARGET_OS_OSX && !SWEET_FAMILY`) and 0070 (`CONFIG_EMBEDDED ||
+SWEET_FAMILY`), which must also treat ugglite as a SWEET-family board. After
+applying 0001-0081 plus 0082 to a real tree, only `board_config.h` itself still
+mentions the board macro (its two include blocks) and 64 sites use
+`SWEET_FAMILY`. Rebuild is run 39363087502.
+
 **GICv2 IPI fixed in patch 0083 (2026-10-20).** `SweetCPU::signalCPU()`
 (patch 0018, rewritten by 0065) sent the cross-CPU signal with
 `ICC_SGI1R_EL1`, a GICv3 system register that a GICv2 CPU interface does not
