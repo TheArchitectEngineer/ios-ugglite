@@ -1,0 +1,410 @@
+--- a/pexpert/arm/pe_fiq.c
++++ b/pexpert/arm/pe_fiq.c
+@@ -13,15 +13,19 @@
+ #include <pexpert/arm64/board_config.h>
+ 
+ 
+-#if HAS_GIC_V3
+-#define GICR_WAKE_TIMEOUT_NS (1000000000ULL) // timeout for redistributor wakeup (default 1s)
+-MACHINE_TIMEOUT(gicr_wake_timeout_ns, "gicr-wake-timeout", GICR_WAKE_TIMEOUT_NS, MACHINE_TIMEOUT_UNIT_NSEC, NULL);
+-
+ #if defined(SWEET)
+-/* Phone default; QEMU virt wires the architected virtual timer to INTID 27. */
++/*
++ * The virtual timer's PPI number is per-SoC (sweet 19, ugglite 20), so it is
++ * a variable, overridable from the device tree's "virtual-timer-intid". It
++ * lives outside the HAS_GIC_V3 block because the GICv2 path needs it too.
++ */
+ SECURITY_READ_ONLY_LATE(uint32_t) sweet_vtimer_intid = SWEET_VTIMER_INTID;
+ #endif
+ 
++#if HAS_GIC_V3
++#define GICR_WAKE_TIMEOUT_NS (1000000000ULL) // timeout for redistributor wakeup (default 1s)
++MACHINE_TIMEOUT(gicr_wake_timeout_ns, "gicr-wake-timeout", GICR_WAKE_TIMEOUT_NS, MACHINE_TIMEOUT_UNIT_NSEC, NULL);
++
+ static vm_offset_t gicd_base;
+ static vm_offset_t gicr_base;
+ static vm_offset_t gicr_size;
+@@ -50,6 +54,22 @@
+ #define gicr_write32(offset, data) (_gic_write32(gicr_pe_base + (offset), (data)))
+ #define gicr_read64(offset) (_gic_read64(gicr_pe_base + (offset)))
+ 
++/*
++ * Acknowledge / end-of-interrupt, shared by the IRQ entry path in sleh.c.
++ * GICv3 takes these through system registers; GICv2 (below) uses MMIO.
++ */
++uint64_t
++sweet_gic_ack(void)
++{
++	return __builtin_arm_rsr64("ICC_IAR1_EL1");
++}
++
++void
++sweet_gic_eoi(uint64_t iar)
++{
++	__builtin_arm_wsr64("ICC_EOIR1_EL1", iar);
++}
++
+ static vm_offset_t
+ find_gicr_pe_base()
+ {
+@@ -222,6 +242,149 @@
+ 	__builtin_arm_isb(ISB_SY);
+ #endif /* SWEET */
+ }
++#elif defined(SWEET_GIC_V2)
++/*
++ * GICv2 for Qualcomm SoCs without a redistributor (ugglite / MSM8917,
++ * "qcom,msm-qgic2"). Two MMIO frames: the distributor and a per-core CPU
++ * interface. There are no ICC_* system registers for the interrupt
++ * acknowledgement path - only the Group 1 enable stays a system register.
++ *
++ * On Qualcomm the GIC has two security states and TrustZone owns Group 0,
++ * so everything this kernel owns is Group 1 and arrives as an IRQ through
++ * sleh_irq(), exactly like the GICv3 SWEET path.
++ */
++
++static vm_offset_t gicd_base;
++static vm_offset_t gicc_base;
++
++static uint32_t
++_gic2_read32(vm_offset_t addr)
++{
++	return *((volatile uint32_t *) addr);
++}
++
++static void
++_gic2_write32(vm_offset_t addr, uint32_t value)
++{
++	*((volatile uint32_t *) addr) = value;
++}
++
++#define gicd2_read32(offset) (_gic2_read32(gicd_base + (offset)))
++#define gicd2_write32(offset, data) (_gic2_write32(gicd_base + (offset), (data)))
++#define gicc2_read32(offset) (_gic2_read32(gicc_base + (offset)))
++#define gicc2_write32(offset, data) (_gic2_write32(gicc_base + (offset), (data)))
++
++/* GICv2: acknowledge from the CPU interface's IAR, complete through EOIR. */
++uint64_t
++sweet_gic_ack(void)
++{
++	return gicc2_read32(GICC_IAR);
++}
++
++void
++sweet_gic_eoi(uint64_t iar)
++{
++	gicc2_write32(GICC_EOIR, (uint32_t)iar);
++}
++
++void
++pe_init_fiq()
++{
++	int error;
++	DTEntry entry;
++	void const *prop;
++	unsigned int prop_size;
++
++	/*
++	 * gicd_base is 0 only before the boot CPU has initialised it. Secondary
++	 * CPUs must not call the SecureDT routines (they are not thread-safe).
++	 */
++	if (!gicd_base) {
++		error = SecureDTLookupEntry(NULL, "/soc/interrupt-controller", &entry);
++		if (error != kSuccess) {
++			error = SecureDTLookupEntry(NULL, "/arm-io/gic", &entry);
++		}
++		if (error != kSuccess) {
++			panic("%s: cannot find GIC node in DT", __func__);
++		}
++
++		error = SecureDTGetProperty(entry, "reg", &prop, &prop_size);
++		if (error != kSuccess) {
++			panic("%s: cannot find GIC MMIO regions in DT", __func__);
++		}
++		/* GICD base/size then GICC base/size: four 8-byte cells. */
++		if (prop_size < 4 * sizeof(uint64_t)) {
++			panic("%s: GIC reg has %u bytes, expected at least 32", __func__, prop_size);
++		}
++
++		/* Same per-SoC timer override as the GICv3 path. */
++		void const *timer_prop;
++		unsigned int timer_size;
++		if (SecureDTGetProperty(entry, "virtual-timer-intid", &timer_prop, &timer_size) == kSuccess) {
++			if (timer_size != sizeof(uint32_t)) {
++				panic("%s: invalid virtual-timer-intid size %u", __func__, timer_size);
++			}
++			uint32_t intid = *(const uint32_t *)timer_prop;
++			if (intid < 16 || intid >= 32) {
++				panic("%s: virtual timer INTID %u is not a PPI", __func__, intid);
++			}
++			sweet_vtimer_intid = intid;
++		}
++		kprintf("SWEET GIC: v2 virtual timer INTID %u\n", sweet_vtimer_intid);
++
++		vm_offset_t soc_base_phys = pe_arm_get_soc_base_phys();
++		uint64_t const gicd_base_prop = ((uint64_t const *) prop)[0];
++		uint64_t const gicd_size_prop = ((uint64_t const *) prop)[1];
++		uint64_t const gicc_base_prop = ((uint64_t const *) prop)[2];
++		uint64_t const gicc_size_prop = ((uint64_t const *) prop)[3];
++
++		gicd_base = ml_io_map(soc_base_phys + gicd_base_prop, gicd_size_prop);
++		if (!gicd_base) {
++			panic("%s: cannot map GICD region", __func__);
++		}
++		gicc_base = ml_io_map(soc_base_phys + gicc_base_prop, gicc_size_prop);
++		if (!gicc_base) {
++			panic("%s: cannot map GICC region", __func__);
++		}
++
++		kprintf("SWEET GIC: v2 distributor %p cpu-interface %p\n",
++		    (void *)gicd_base, (void *)gicc_base);
++	}
++
++	/* Forward Group 1 to the CPU interfaces and wait for the write to land. */
++	gicd2_write32(GICD_CTLR, gicd2_read32(GICD_CTLR) | GICD_CTLR_ENABLE);
++	while (gicd2_read32(GICD_CTLR) & GICD_CTLR_RWP) {
++		;
++	}
++
++	/* All SGIs/PPIs we own are Group 1 (non-secure). */
++	for (unsigned int i = 0; i < 32; i += 4) {
++		gicd2_write32(GICD_IGROUPR + i, 0xffffffff);
++	}
++
++	/* Priority 0xa0 everywhere, so PMR 0xff admits everything. */
++	for (unsigned int i = 0; i < 32; i += 4) {
++		gicd2_write32(GICD_IPRIORITYR + i, 0xa0a0a0a0);
++	}
++
++	/* The virtual timer PPI is level-sensitive: ICFGR bit pair 0. */
++	gicd2_write32(GICD_ICFGR + 4, 0);
++
++	gicd2_write32(GICD_ISENABLER, (1U << sweet_vtimer_intid) | (1U << SWEET_IPI_SGI));
++
++	/* CPU interface: admit all priorities, no binary point, enable. */
++	gicc2_write32(GICC_PMR, 0xff);
++	gicc2_write32(GICC_BPR, 0);
++	gicc2_write32(GICC_CTLR, 1);
++
++	/* Group 1 enable is still a system register, even on GICv2. */
++	uint64_t icc_sre = __builtin_arm_rsr64("ICC_SRE_EL1");
++	__builtin_arm_wsr64("ICC_SRE_EL1", icc_sre | ICC_SRE_SRE);
++	__builtin_arm_isb(ISB_SY);
++	__builtin_arm_wsr64("ICC_IGRPEN1_EL1", 1);
++	__builtin_arm_isb(ISB_SY);
++}
++
+ #else
+ void
+ pe_init_fiq()
+--- a/osfmk/arm64/sleh.c
++++ b/osfmk/arm64/sleh.c
+@@ -1858,10 +1858,14 @@
+ 
+ #if defined(SWEET)
+ 	/*
+-	 * sweet: TrustZone owns GIC Group 0, so the timer and IPIs that other
+-	 * ARM64 targets take as FIQs arrive here as Group 1 IRQs.
++	 * TrustZone owns GIC Group 0, so the timer and IPIs that other ARM64
++	 * targets take as FIQs arrive here as Group 1 IRQs.
++	 *
++	 * Acknowledge and end-of-interrupt go through the board's accessors:
++	 * GICv3 uses the ICC_* system registers, GICv2 reads the CPU
++	 * interface's IAR and writes EOIR (see pe_fiq.c).
+ 	 */
+-	uint64_t iar = __builtin_arm_rsr64("ICC_IAR1_EL1");
++	uint64_t iar = sweet_gic_ack();
+ 	uint32_t intid = (uint32_t)(iar & 0xFFFFFF);
+ 
+ 	if (intid >= 1020 && intid <= 1023) {
+@@ -1873,11 +1877,11 @@
+ 		INTERRUPT_MASKED_DEBUG_START(rtclock_intr, DBG_INTR_TYPE_TIMER);
+ 		rtclock_intr(TRUE);
+ 		INTERRUPT_MASKED_DEBUG_END();
+-		__builtin_arm_wsr64("ICC_EOIR1_EL1", iar);
++		sweet_gic_eoi(iar);
+ 	} else if (intid < 16) {
+ 		sleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_IPI);
+ 		/* Ack before handling so an IPI raised meanwhile is not lost */
+-		__builtin_arm_wsr64("ICC_EOIR1_EL1", iar);
++		sweet_gic_eoi(iar);
+ 		__builtin_arm_isb(ISB_SY);
+ 		cpu_signal_handler();
+ 	} else {
+@@ -1888,7 +1892,7 @@
+ 			    cdp->interrupt_nub,
+ 			    intid);
+ 		}
+-		__builtin_arm_wsr64("ICC_EOIR1_EL1", iar);
++		sweet_gic_eoi(iar);
+ 	}
+ 	__builtin_arm_isb(ISB_SY);
+ #else
+--- a/pexpert/pexpert/arm/protos.h
++++ b/pexpert/pexpert/arm/protos.h
+@@ -36,8 +36,11 @@
+ int uart_getc(void);
+ 
+ void pe_init_fiq(void);
+-#if defined(ARM64_BOARD_CONFIG_SWEET)
+-extern uint32_t sweet_vtimer_intid;
++#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_UGGLITE)
++/* GIC acknowledge / end-of-interrupt; GICv3 uses ICC_* system registers,
++ * GICv2 reads the CPU interface. Implemented in pexpert/arm/pe_fiq.c. */
++uint64_t sweet_gic_ack(void);
++void sweet_gic_eoi(uint64_t iar);
+ #endif
+ 
+ #ifdef PRIVATE
+--- a/pexpert/pexpert/arm64/board_config.h
++++ b/pexpert/pexpert/arm64/board_config.h
+@@ -108,6 +108,17 @@
+ 
+ #endif  /* ARM64_BOARD_CONFIG_SWEET */
+ 
++#ifdef ARM64_BOARD_CONFIG_UGGLITE
++#include <pexpert/arm64/UGGLITE.h>
++
++#define MAX_L2_CLINE                   6
++#define MAX_CPUS                       4
++#define MAX_CPU_CLUSTERS               1
++
++#define CORE_NCTRS                     8 /* Placeholder; KPC is not enabled for this target */
++
++#endif  /* ARM64_BOARD_CONFIG_UGGLITE */
++
+ #ifdef ARM64_BOARD_CONFIG_VMAPPLE
+ #include <pexpert/arm64/VMAPPLE.h>
+ 
+--- a/pexpert/pexpert/arm64/Makefile
++++ b/pexpert/pexpert/arm64/Makefile
+@@ -18,7 +18,8 @@
+ 	H13.h \
+ 	VMAPPLE.h \
+ 	BCM2837.h \
+-	SWEET.h
++	SWEET.h \
++	UGGLITE.h
+ 
+ 
+ # Headers installed into System.framework/PrivateHeaders (userspace internal SDK only).
+--- a/makedefs/MakeInc.def
++++ b/makedefs/MakeInc.def
+@@ -29,7 +29,7 @@
+ else ifneq ($(findstring _host,$(RC_ProjectName)),)
+ SUPPORTED_ARM64_MACHINE_CONFIGS = NONE
+ else
+-SUPPORTED_ARM64_MACHINE_CONFIGS = BCM2837 T6000 T8101 T8103 VMAPPLE SWEET
++SUPPORTED_ARM64_MACHINE_CONFIGS = BCM2837 T6000 T8101 T8103 VMAPPLE SWEET UGGLITE
+ 
+ endif
+ 
+@@ -62,6 +62,7 @@
+ MACHINE_FLAGS_ARM64_VMAPPLE = -DARM64_BOARD_CONFIG_VMAPPLE              -march=armv8.5a
+ MACHINE_FLAGS_ARM64_BCM2837 = -DARM64_BOARD_CONFIG_BCM2837
+ MACHINE_FLAGS_ARM64_SWEET = -DARM64_BOARD_CONFIG_SWEET                -march=armv8.2-a+crypto
++MACHINE_FLAGS_ARM64_UGGLITE = -DARM64_BOARD_CONFIG_UGGLITE            -march=armv8-a
+ 
+ 
+ #
+@@ -261,7 +262,7 @@
+ export ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG := $(shell echo $(CURRENT_ARCH_CONFIG) | tr A-Z a-z)
+ ifneq ($(filter arm64,$(ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG)),)
+ # sweet's Cortex-A76/A55 have no pointer authentication: stay plain arm64
+-ifneq ($(CURRENT_MACHINE_CONFIG),SWEET)
++ifneq ($(filter $(CURRENT_MACHINE_CONFIG),SWEET UGGLITE),)
+ export ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG := arm64e
+ endif
+ endif
+--- /dev/null
++++ b/pexpert/pexpert/arm64/UGGLITE.h
+@@ -0,0 +1,88 @@
++/*
++ * Board config for the Redmi Note 5A ("ugglite", Qualcomm MSM8917 +
++ * PM8937): 4x Cortex-A53, ARMv8.0, no PAC, no 16K granule.
++ *
++ * This target is the 4K-granule counterpart of SWEET. The two facts that
++ * differ from sweet and reach into the kernel core:
++ *
++ *  1. The Cortex-A53 implements only 4K and 64K translation granules
++ *     (measured on the device: ID_AA64MMFR0_EL1 = 0x1122, TGran16 = 0).
++ *     So __ARM_16K_PG__ is NOT defined and ARM_PGSHIFT stays 12.
++ *
++ *  2. The iOS 16 userspace is built for 16K pages. That is still fine: on a
++ *     non-16K build with more than 1 GiB of RAM, arm_init() selects
++ *     PAGE_SHIFT_CONST = PAGE_MAX_SHIFT (14), so the VM page size is 16K
++ *     while the hardware granule is 4K. PAGE_RATIO is then 4 and the pmap
++ *     writes four 4K PTEs per 16K VM page - the A7/A8 arrangement. ugglite
++ *     has 2 GiB, so this branch is taken automatically.
++ *
++ * The interrupt controller is GICv2 (qcom,msm-qgic2), not GICv3: no
++ * redistributors, and the CPU interface is a second MMIO frame. Everything
++ * is still taken as a Group 1 IRQ through the same sleh_irq() path, because
++ * Qualcomm's GIC has two security states and TrustZone owns Group 0.
++ */
++
++#ifndef _PEXPERT_ARM64_UGGLITE_H
++#define _PEXPERT_ARM64_UGGLITE_H
++
++#define NO_MONITOR                1
++#define NO_ECORE                  1
++
++#define UGGLITE                   1
++#define SWEET                     1     /* shares the SWEET driver code paths */
++#define SWEET_GIC_V2              1     /* selects the GICv2 implementation */
++
++#define ARM_ARCH_TIMER
++#define __ARM_ARCH__              8
++#define __ARM_VMSA__              8
++#define __ARM_VFP__               4
++#define __ARM_COHERENT_CACHE__    1
++#define __ARM_DEBUG__             7
++#define __ARM_ENABLE_SWAP__       1
++
++/*
++ * Cortex-A53 is ARMv8.0. Do NOT set __ARM_PAN_AVAILABLE__ (PAN is ARMv8.1),
++ * __ARM_V8_CRYPTO_EXTENSIONS__ (optional on A53, and the boot CPU must be
++ * checked before relying on it) or __ARM_16K_PG__ (no such granule).
++ *
++ * __ARM64_PMAP_SUBPAGE_L1__ matches the BCM2837 (4K-granule) config and lets
++ * the pmap use level-1 subpages, which a 4K root table needs for the VM
++ * region sizes this kernel uses.
++ */
++#define __ARM64_PMAP_SUBPAGE_L1__ 1
++
++/*
++ * Qualcomm numbers the architected timer PPIs 2/3/4/1 (secure phys, phys,
++ * virt, hyp) on MSM8917, so the virtual timer XNU uses (CNTV) is
++ * INTID 16 + 4 = 20. Verified against the live device tree on the phone.
++ */
++#define SWEET_VTIMER_INTID        20
++#define SWEET_IPI_SGI             1       /* SGI used for cross-CPU signals */
++
++#define GIC_SPURIOUS_IRQ          1023    /* IRQ no. for GIC spurious interrupt */
++
++/* GICv2 register definitions; see the GICv2 architecture spec (IHI 0048B). */
++#define GICD_CTLR                 0x000
++#define GICD_TYPER                0x004
++#define GICD_IGROUPR              0x080
++#define GICD_ISENABLER            0x100
++#define GICD_IPRIORITYR           0x400
++#define GICD_ICFGR                0xc00
++
++#define GICC_CTLR                 0x000
++#define GICC_PMR                  0x004
++#define GICC_BPR                  0x008
++#define GICC_IAR                  0x00c
++#define GICC_EOIR                 0x010
++
++#define GICD_CTLR_ENABLE          0x1
++#define GICD_CTLR_RWP             0x80000000
++
++/* Still needed on GICv2: the Group 1 enable is an ICC_* system register. */
++#define ICC_SRE_SRE               0x1
++
++#ifndef ASSEMBLER
++#define PLATFORM_PANIC_LOG_DISABLED
++#endif /* ! ASSEMBLER */
++
++#endif /* ! _PEXPERT_ARM64_UGGLITE_H */

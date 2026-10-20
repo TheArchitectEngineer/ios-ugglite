@@ -180,76 +180,114 @@ Boot partition backed up to `backup-ugglite/boot-stock.img` (64 MiB, SHA256
 written to flash. `fastboot boot` is non-destructive; the phone recovers by
 itself after the probe's ~3 min wait + reset.
 
-### >>> PAGE-SIZE VERDICT 2026-10-20: mixed page size runs the WRONG WAY <<<
+### >>> PAGE-SIZE VERDICT 2026-10-20 (CORRECTED): 4K hardware CAN host 16K VM pages <<<
 
-Read against the real xnu-8796.141.3 source (downloaded to /tmp/xnu-src, not in
-git). The question was whether `__ARM_MIXED_PAGE_SIZE__` gives us 16K userspace
-on 4K hardware, as on A7/A8. **It does not.** The support is explicitly the
-other direction:
+**An earlier version of this section said the opposite. It was wrong; the
+correction is below and the reasoning is kept so the mistake is not repeated.**
 
-`osfmk/arm64/proc_reg.h:358`:
-> `__ARM_MIXED_PAGE_SIZE__ configures the kernel to support page tables that do`
-> `not use the kernel page size. This is primarily meant to support running`
-> `4KB page processes on a 16KB page kernel.`
+Read against xnu-8796.141.3 (`/tmp/xnu-src`, not in git). There are TWO separate
+mechanisms and I initially confused them:
 
-Three independent confirmations:
+- `__ARM_MIXED_PAGE_SIZE__` - lets a **16K kernel** host **4K processes**
+  (`proc_reg.h:358`: "primarily meant to support running 4KB page processes on
+  a 16KB page kernel"). This is NOT what ugglite needs.
+- **`PAGE_RATIO`** - lets the **VM page size differ from the hardware granule**
+  (`osfmk/arm/pmap/pmap.h:251`: "For setups where the VM page size does not
+  match the hardware page size (the VM page size must be a multiple of the
+  hardware page size)"). **This IS what ugglite needs.**
 
-1. **Kernel page size is chosen at runtime** (`osfmk/arm/arm_init.c:397`): if
-   `args->memSize > 1 GiB` -> `PAGE_SHIFT_CONST = PAGE_MAX_SHIFT` (14, i.e. 16K);
-   else `PAGE_SHIFT_CONST = ARM_PGSHIFT` (12 on a non-`__ARM_16K_PG__` build).
-   So a SWEET-style 4K build would give a **4K kernel** on ugglite.
-2. **Every task map defaults to the kernel page size**:
-   `vm_map_set_page_shift(result, PAGE_SHIFT)` (vm_map.c:1484). A 4K kernel means
-   4K task maps.
-3. **The 64-bit user page shift is hardcoded to 16K** in the commpage
-   (`osfmk/arm/commpage/commpage.c:178`):
-   `_COMM_PAGE_USER_PAGE_SHIFT_64 = SIXTEENK_PAGE_SHIFT`, unconditionally, for
-   all `__arm64__`. Userspace is *told* 16K while the kernel and its task maps
-   would be 4K.
+How it works, and why ugglite is already in the right configuration:
 
-That last line is the crux: xnu-8796 has no 16K-userspace-on-4K-kernel
-configuration. `__ARM_MIXED_PAGE_SIZE__` exists so that a 16K kernel can host
-4K processes (H13/A15 sets `__ARM_16K_PG__` + `ARM_PARAMETERIZED_PMAP` +
-`__ARM_MIXED_PAGE_SIZE__` together); it cannot promote a 4K kernel to 16K
-processes.
+- `osfmk/arm/arm_init.c:398` - if `args->memSize > 1 GiB` the kernel selects
+  `PAGE_SHIFT_CONST = PAGE_MAX_SHIFT` (14, i.e. **16K VM pages**) regardless of
+  the hardware granule. ugglite has **2 GiB**, so this branch is taken.
+- `ARM_PGSHIFT` (`osfmk/arm64/proc_reg.h:1149`) is **12 (4K)** on a build that
+  does not define `__ARM_16K_PG__` - which is exactly what a Cortex-A53 target
+  must be, since the A53 has no 16K granule (measured on the device:
+  `ID_AA64MMFR0_EL1 = 0x1122`, TGran16 = 0).
+- Therefore `PAGE_RATIO = (1 << PAGE_SHIFT) >> ARM_PGSHIFT = 16K/4K = **4**`,
+  and `TEST_PAGE_RATIO_4` is true. The pmap writes four 4K PTEs per 16K VM page
+  (`write_pte_fast`, `pmap.c:620`, and the static-protect path at
+  `machine_routines.c:1716` both handle it).
 
-**Consequences for the port:**
-- Running iOS 16 userspace on ugglite needs a 16K *kernel*, and the A53 has no
-  16K granule. The iOS 16 binaries assume 16K (and are told so by the commpage).
-- A 4K kernel would be self-consistent (4K kernel, 4K maps) but the iOS 16
-  userspace, dyld shared cache and every prebuilt binary are built for 16K
-  alignment; `vm_page_size`-dependent code would disagree with the commpage.
-- Emulating a 16K granule on 4K hardware is not a config change: it would mean
-  making the pmap coalesce 4 x 4K pages into every "16K" page, i.e. a new
-  page-size emulation layer, plus fixing the commpage, `PAGE_SHIFT_CONST` users
-  and every `PAGE_SIZE` assumption. That is a research project, not a port.
+**=> 16K VM pages on 4K hardware pages: exactly the A7/A8 arrangement, and the
+arrangement the iOS 16 userspace expects.** The commpage advertising 16K to
+64-bit userspace (`commpage.c:178`) is consistent with this, not in conflict
+with it - that was the specific misreading that produced the wrong verdict.
 
-**VERDICT: iOS 16 on ugglite is not reachable through xnu-8796 as it stands.**
-The 16K granule is a hardware requirement of the iOS 16 userland, and MSM8917's
-Cortex-A53 does not implement it. This is a property of the SoC, not of our
-porting work, and no amount of driver writing changes it.
+Support breadth (not vestigial): `PAGE_RATIO` has ~60 uses across osfmk and
+`TEST_PAGE_RATIO_4` has 6, including PTE writes, static protect and ledger
+accounting.
 
-**What remains genuinely useful (and cheap) from this work:**
-- `shim/board.h` + `shim/probe.c` are a general board-characterisation tool for
-  any Qualcomm phone: page-size support, live memory map, GIC version and base,
-  timer PPIs, PSCI. That answered this question in one boot.
-- `tools/qemu-probe.py` rehearses it on the host first.
-- The patch series 0019-0027 and 0035-0068 (GUI/HID/userspace contract) is
-  still the valuable, SoC-independent part for any future 16K-capable target.
-- An older iOS (one whose userland is 4K-page, i.e. pre-A9 / iOS 9-era on
-  A7/A8-class hardware) would in principle fit a 4K kernel, but that is a very
-  different project (different XNU generation, different userland, no 16K
-  assumptions) and was not evaluated.
+**So the port is NOT blocked by page size.** What remains is ordinary (if
+large) bring-up work:
+1. A 4K-granule SWEET-style board config: `ARM_PGSHIFT = 12`, do NOT define
+   `__ARM_16K_PG__`, keep `PAGE_RATIO = 4`, and keep GICv2 + 4 CPUs.
+2. Verify the `PAGE_RATIO = 4` paths under real load (QEMU first) - this is the
+   genuine remaining unknown, not a blocker in principle.
+3. The SoC drivers: GICv2, SDHCI/eMMC root, USB device mode, a 32-bit-PA memory
+   map in mkadt (2 GiB in two banks, no upper bank), 720x1280 panel, touch,
+   PM8937 keys.
 
-**If the goal is "iOS on this phone", the honest options are:** stop, or target
-a 16K-capable SoC. If the goal is "characterise and port kernels to cheap
-Qualcomm phones", the probe and the shim board abstraction are the reusable
-part and are worth keeping.
+**Lesson recorded:** I had the source on disk and still reasoned from a macro's
+comment instead of following the page-size arithmetic. One `grep PAGE_RATIO`
+would have found the right mechanism. Do not declare a hardware limit from a
+single preprocessor comment when the source is available.
+
+### >>> PATCH 0082 2026-10-20: ugglite board config + GICv2 (NOT BUILT YET) <<<
+
+First kernel-side step of the ugglite port, written against xnu-8796.141.3 and
+verified to apply cleanly on top of 0017 with `git apply --check`. **It has not
+been compiled: this laptop has no Apple clang and no CI build tree, so the next
+action is a CI run** (`gh workflow run xnu.yml`, MACHINE_CONFIG=UGGLITE).
+
+`xnu/patches/0082-ugglite-4k-gicv2.patch` adds:
+
+- **`pexpert/pexpert/arm64/UGGLITE.h`** (new). Cortex-A53 / MSM8917 board
+  config. Crucially it does **NOT** define `__ARM_16K_PG__`, so `ARM_PGSHIFT`
+  stays 12; it defines `UGGLITE`, `SWEET` (to reuse the SWEET driver paths) and
+  `SWEET_GIC_V2`. It also defines `__ARM64_PMAP_SUBPAGE_L1__` (like BCM2837) and
+  deliberately omits `__ARM_PAN_AVAILABLE__` (PAN is ARMv8.1; A53 is 8.0),
+  `__ARM_V8_CRYPTO_EXTENSIONS__` (optional on A53, must be probed) and
+  `HAS_GIC_V3`. `SWEET_VTIMER_INTID` is **20** here (measured: PPI 4), vs 19 on
+  sweet.
+- **`board_config.h` / `arm64/Makefile` / `makedefs/MakeInc.def`**: register
+  `ARM64_BOARD_CONFIG_UGGLITE`, `MAX_CPUS 4`, and
+  `MACHINE_FLAGS_ARM64_UGGLITE = -march=armv8-a`. Also adds UGGLITE to the
+  "plain arm64, not arm64e" list next to SWEET (no PAC on A53).
+- **`pexpert/arm/pe_fiq.c`**: a `#elif defined(SWEET_GIC_V2)` implementation of
+  `pe_init_fiq()`. GICv2 has no redistributors: the distributor and the CPU
+  interface are two MMIO frames taken from the DT `reg` property (GICD
+  0xb000000, GICC 0xb002000 on MSM8917). It enables Group 1, sets priorities,
+  marks the virtual-timer PPI level-sensitive, enables the timer PPI and the IPI
+  SGI, then programs GICC_PMR/BPR/CTLR. The Group 1 enable
+  (`ICC_IGRPEN1_EL1`) is still a system register on GICv2.
+- **`sweet_gic_ack()` / `sweet_gic_eoi()`** accessors, declared in
+  `pexpert/pexpert/arm/protos.h`. `sleh_irq()` now calls them instead of using
+  `ICC_IAR1_EL1`/`ICC_EOIR1_EL1` directly, so the same IRQ entry path serves
+  both GIC versions (GICv3 = system registers, GICv2 = IAR/EOIR MMIO).
+- **`sweet_vtimer_intid` moved out of the `#if HAS_GIC_V3` block.** Patch 0017
+  defined it inside that block, so a GICv2 build would have failed to link.
+  Both GIC paths now honour the DT `virtual-timer-intid` override.
+
+**Why this should work (the page-size point):** with no `__ARM_16K_PG__`,
+`ARM_PGSHIFT` = 12; ugglite has 2 GiB, so `arm_init()` takes the `memSize >
+1 GiB` branch and sets `PAGE_SHIFT_CONST = 14`. `PAGE_RATIO = 16K/4K = 4` and
+`TEST_PAGE_RATIO_4` is true - 16K VM pages on 4K hardware pages, the A7/A8
+arrangement the iOS 16 userspace expects. Verified arithmetically; the
+remaining risk is whether those `PAGE_RATIO == 4` paths hold under real load.
 
 **NEXT (in order):**
-0. ~~Decide the page-size strategy.~~ **Done: mixed page size does not help; see
-   the verdict above. No further kernel work on ugglite is justified until the
-   goal is redefined.**
+0. **Build it:** `gh workflow run xnu.yml -f machine_config=UGGLITE`, download
+   the artifact, and fix whatever the compiler finds. Everything in 0082 is
+   unbuilt so far.
+1. Boot the result on the phone with `rd=md0` (RAM disk) before touching
+   userdata: the goal is just `SWEET GIC: v2 distributor ... cpu-interface ...`
+   and timer interrupts firing, not a root filesystem.
+2. Then the remaining SoC work: SDHCI/eMMC root, USB device mode, a 32-bit-PA
+   memory map in mkadt (2 GiB in two banks at 0x80000000/0xc0000000, carve-outs
+   at 0x84a00000/0x86800000/0x8bd00000/0x8ce00000/0x90000000/0xb0000000),
+   720x1280 panel, touch, PM8937 keys.
 1. `fastboot boot shim/out/shim-boot-ugglite.img` on the Note 5A with the phone
    in fastboot. Expected: red "SHIM ugglite loader + board probe" screen, then
    the probe results, then reset in ~3 min.
