@@ -2,7 +2,8 @@
 # dxb runs patches/*.sh from the XNU source root before applying *.patch.
 set -euo pipefail
 
-[[ "${MACHINE_CONFIG:-}" == SWEET ]] || exit 0
+# Both boards share these staged sources: sweet (16K) and ugglite (4K).
+case "${MACHINE_CONFIG:-}" in SWEET|UGGLITE) ;; *) exit 0 ;; esac
 [[ "${MACOS_VERSION:-}" == 13.5 ]] || {
     echo 'SWEET libpthread integration requires xnu-8796.141.3 (macOS 13.5)' >&2
     exit 1
