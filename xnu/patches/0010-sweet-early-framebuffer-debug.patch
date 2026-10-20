@@ -387,7 +387,7 @@ diff --git a/osfmk/arm64/ugg_early_board.h b/osfmk/arm64/ugg_early_board.h
 new file mode 100644
 --- /dev/null
 +++ b/osfmk/arm64/ugg_early_board.h
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,35 @@
 +/*
 + * Early-console panel geometry, per board.
 + *
