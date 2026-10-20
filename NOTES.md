@@ -180,11 +180,76 @@ Boot partition backed up to `backup-ugglite/boot-stock.img` (64 MiB, SHA256
 written to flash. `fastboot boot` is non-destructive; the phone recovers by
 itself after the probe's ~3 min wait + reset.
 
+### >>> PAGE-SIZE VERDICT 2026-10-20: mixed page size runs the WRONG WAY <<<
+
+Read against the real xnu-8796.141.3 source (downloaded to /tmp/xnu-src, not in
+git). The question was whether `__ARM_MIXED_PAGE_SIZE__` gives us 16K userspace
+on 4K hardware, as on A7/A8. **It does not.** The support is explicitly the
+other direction:
+
+`osfmk/arm64/proc_reg.h:358`:
+> `__ARM_MIXED_PAGE_SIZE__ configures the kernel to support page tables that do`
+> `not use the kernel page size. This is primarily meant to support running`
+> `4KB page processes on a 16KB page kernel.`
+
+Three independent confirmations:
+
+1. **Kernel page size is chosen at runtime** (`osfmk/arm/arm_init.c:397`): if
+   `args->memSize > 1 GiB` -> `PAGE_SHIFT_CONST = PAGE_MAX_SHIFT` (14, i.e. 16K);
+   else `PAGE_SHIFT_CONST = ARM_PGSHIFT` (12 on a non-`__ARM_16K_PG__` build).
+   So a SWEET-style 4K build would give a **4K kernel** on ugglite.
+2. **Every task map defaults to the kernel page size**:
+   `vm_map_set_page_shift(result, PAGE_SHIFT)` (vm_map.c:1484). A 4K kernel means
+   4K task maps.
+3. **The 64-bit user page shift is hardcoded to 16K** in the commpage
+   (`osfmk/arm/commpage/commpage.c:178`):
+   `_COMM_PAGE_USER_PAGE_SHIFT_64 = SIXTEENK_PAGE_SHIFT`, unconditionally, for
+   all `__arm64__`. Userspace is *told* 16K while the kernel and its task maps
+   would be 4K.
+
+That last line is the crux: xnu-8796 has no 16K-userspace-on-4K-kernel
+configuration. `__ARM_MIXED_PAGE_SIZE__` exists so that a 16K kernel can host
+4K processes (H13/A15 sets `__ARM_16K_PG__` + `ARM_PARAMETERIZED_PMAP` +
+`__ARM_MIXED_PAGE_SIZE__` together); it cannot promote a 4K kernel to 16K
+processes.
+
+**Consequences for the port:**
+- Running iOS 16 userspace on ugglite needs a 16K *kernel*, and the A53 has no
+  16K granule. The iOS 16 binaries assume 16K (and are told so by the commpage).
+- A 4K kernel would be self-consistent (4K kernel, 4K maps) but the iOS 16
+  userspace, dyld shared cache and every prebuilt binary are built for 16K
+  alignment; `vm_page_size`-dependent code would disagree with the commpage.
+- Emulating a 16K granule on 4K hardware is not a config change: it would mean
+  making the pmap coalesce 4 x 4K pages into every "16K" page, i.e. a new
+  page-size emulation layer, plus fixing the commpage, `PAGE_SHIFT_CONST` users
+  and every `PAGE_SIZE` assumption. That is a research project, not a port.
+
+**VERDICT: iOS 16 on ugglite is not reachable through xnu-8796 as it stands.**
+The 16K granule is a hardware requirement of the iOS 16 userland, and MSM8917's
+Cortex-A53 does not implement it. This is a property of the SoC, not of our
+porting work, and no amount of driver writing changes it.
+
+**What remains genuinely useful (and cheap) from this work:**
+- `shim/board.h` + `shim/probe.c` are a general board-characterisation tool for
+  any Qualcomm phone: page-size support, live memory map, GIC version and base,
+  timer PPIs, PSCI. That answered this question in one boot.
+- `tools/qemu-probe.py` rehearses it on the host first.
+- The patch series 0019-0027 and 0035-0068 (GUI/HID/userspace contract) is
+  still the valuable, SoC-independent part for any future 16K-capable target.
+- An older iOS (one whose userland is 4K-page, i.e. pre-A9 / iOS 9-era on
+  A7/A8-class hardware) would in principle fit a 4K kernel, but that is a very
+  different project (different XNU generation, different userland, no 16K
+  assumptions) and was not evaluated.
+
+**If the goal is "iOS on this phone", the honest options are:** stop, or target
+a 16K-capable SoC. If the goal is "characterise and port kernels to cheap
+Qualcomm phones", the probe and the shim board abstraction are the reusable
+part and are worth keeping.
+
 **NEXT (in order):**
-0. **Decide the page-size strategy before writing any more code.** Read
-   `osfmk/arm/pmap/pmap.c` and `pmap_pt_geometry.h` for `__ARM_MIXED_PAGE_SIZE__`
-   / `ARM_PARAMETERIZED_PMAP` and confirm 4K-hardware + 16K-userspace works in
-   xnu-8796. If it does not, the ugglite port is not viable as an iOS 16 port.
+0. ~~Decide the page-size strategy.~~ **Done: mixed page size does not help; see
+   the verdict above. No further kernel work on ugglite is justified until the
+   goal is redefined.**
 1. `fastboot boot shim/out/shim-boot-ugglite.img` on the Note 5A with the phone
    in fastboot. Expected: red "SHIM ugglite loader + board probe" screen, then
    the probe results, then reset in ~3 min.
