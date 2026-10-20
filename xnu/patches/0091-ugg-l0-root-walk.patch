@@ -1,0 +1,219 @@
+--- a/osfmk/arm64/proc_reg.h
++++ b/osfmk/arm64/proc_reg.h
+@@ -1250,10 +1250,12 @@
+ 
+ /* some sugar for getting pointers to page tables and entries */
+ 
++#define L0_TABLE_INDEX(va) (((va) & ARM_TT_L0_INDEX_MASK) >> ARM_TT_L0_SHIFT)
+ #define L1_TABLE_INDEX(va) (((va) & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT)
+ #define L2_TABLE_INDEX(va) (((va) & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT)
+ #define L3_TABLE_INDEX(va) (((va) & ARM_TT_L3_INDEX_MASK) >> ARM_TT_L3_SHIFT)
+ 
++#define L1_TABLE_VA(tte)  ((tt_entry_t*) phystokv((*(tte)) & ARM_TTE_TABLE_MASK))
+ #define L2_TABLE_VA(tte)  ((tt_entry_t*) phystokv((*(tte)) & ARM_TTE_TABLE_MASK))
+ #define L3_TABLE_VA(tte2) ((pt_entry_t*) phystokv((*(tte2)) & ARM_TTE_TABLE_MASK))
+ 
+@@ -1381,10 +1383,31 @@
+ #define ARM_TT_TWIG_SHIFT      ARM_TT_L2_SHIFT
+ #define ARM_TT_TWIG_INDEX_MASK ARM_TT_L2_INDEX_MASK
+ 
++/*
++ * The root level of the kernel's page-table walk.
++ *
++ * It is L1 for the generic 4K configurations (T0SZ/T1SZ 25 or 26, a 38/39-bit
++ * VA) and for every 16K build. Ugglite uses T0SZ=T1SZ=16 (a 48-bit VA) because
++ * its kernel link address 0xfffffe0007004000 has to fall inside the TTBR1
++ * region, and 41/38-bit TTBR1 windows do not contain it. With T0SZ=16 the
++ * walk starts at L0, whose index is VA[47:39] and whose entries cover 512GB.
++ *
++ * Everything that walks cpu_tte must use these macros rather than the L1 ones,
++ * or it writes the root entry at index 0 while the hardware reads index 0x1fc.
++ */
++#if defined(UGGLITE)
++#define ARM_TT_ROOT_LEVEL      0
++#define ARM_TT_ROOT_SIZE       ARM_TT_L0_SIZE
++#define ARM_TT_ROOT_OFFMASK    ARM_TT_L0_OFFMASK
++#define ARM_TT_ROOT_SHIFT      ARM_TT_L0_SHIFT
++#define ARM_TT_ROOT_INDEX_MASK ARM_TT_L0_INDEX_MASK
++#else
++#define ARM_TT_ROOT_LEVEL      1
+ #define ARM_TT_ROOT_SIZE       ARM_TT_L1_SIZE
+ #define ARM_TT_ROOT_OFFMASK    ARM_TT_L1_OFFMASK
+ #define ARM_TT_ROOT_SHIFT      ARM_TT_L1_SHIFT
+ #define ARM_TT_ROOT_INDEX_MASK ARM_TT_L1_INDEX_MASK
++#endif
+ 
+ /*
+  * 4KB granule size:
+--- a/osfmk/arm64/arm_vm_init.c
++++ b/osfmk/arm64/arm_vm_init.c
+@@ -887,10 +887,23 @@
+ arm_kva_to_tte(vm_offset_t va)
+ {
+ 	tt_entry_t *tte1, *tte2;
++
++#if ARM_TT_ROOT_LEVEL == 0
++	/*
++	 * 48-bit VA (ugglite, T0SZ=16): the root is L0 and covers 512GB per
++	 * entry, so the walk is root(L0) -> L1 -> L2. Skipping the extra level
++	 * would index the L0 table with L1 bits and write at index 0 while the
++	 * hardware reads VA[47:39] (0x1fc for the kernel), which faults.
++	 */
++	tte1 = cpu_tte + L0_TABLE_INDEX(va);
++	tte2 = L1_TABLE_VA(tte1) + L1_TABLE_INDEX(va);
++	return L2_TABLE_VA(tte2) + L2_TABLE_INDEX(va);
++#else
+ 	tte1 = cpu_tte + L1_TABLE_INDEX(va);
+ 	tte2 = L2_TABLE_VA(tte1) + L2_TABLE_INDEX(va);
+ 
+ 	return tte2;
++#endif
+ }
+ 
+ #if XNU_MONITOR
+@@ -1787,26 +1800,26 @@
+ static void
+ init_ptpages(tt_entry_t *tt, vm_map_address_t start, vm_map_address_t end, bool static_map, uint64_t table_attrs)
+ {
+-	tt_entry_t *l1_tte;
++	tt_entry_t *root_tte;
+ 	vm_offset_t ptpage_vaddr;
+ 
+-	l1_tte = tt + ((start & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
++	root_tte = tt + ((start & ARM_TT_ROOT_INDEX_MASK) >> ARM_TT_ROOT_SHIFT);
+ 
+ 	while (start < end) {
+-		if (*l1_tte == ARM_TTE_EMPTY) {
+-			/* Allocate a page and setup L1 Table TTE in L1 */
++		if (*root_tte == ARM_TTE_EMPTY) {
++			/* Allocate a page and setup the root Table TTE */
+ 			ptpage_vaddr = alloc_ptpage(static_map);
+-			*l1_tte = (kvtophys(ptpage_vaddr) & ARM_TTE_TABLE_MASK) | ARM_TTE_TYPE_TABLE | ARM_TTE_VALID | table_attrs;
++			*root_tte = (kvtophys(ptpage_vaddr) & ARM_TTE_TABLE_MASK) | ARM_TTE_TYPE_TABLE | ARM_TTE_VALID | table_attrs;
+ 			bzero((void *)ptpage_vaddr, ARM_PGBYTES);
+ 		}
+ 
+-		if ((start + ARM_TT_L1_SIZE) < start) {
+-			/* If this is the last L1 entry, it must cover the last mapping. */
++		if ((start + ARM_TT_ROOT_SIZE) < start) {
++			/* If this is the last root entry, it must cover the last mapping. */
+ 			break;
+ 		}
+ 
+-		start += ARM_TT_L1_SIZE;
+-		l1_tte++;
++		start += ARM_TT_ROOT_SIZE;
++		root_tte++;
+ 	}
+ }
+ 
+@@ -1850,11 +1863,21 @@
+ {
+ 	const vm_map_address_t va = UGG_EARLY_FB_VA;
+ 	assert(va + UGG_EARLY_FB_BLOCKS * ARM_TT_L2_SIZE <= gVirtBase);
+-	tt_entry_t l1 = cpu_tte[(va & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT];
+-	assert((l1 & (ARM_TTE_VALID | ARM_TTE_TYPE_MASK)) == (ARM_TTE_VALID | ARM_TTE_TYPE_TABLE));
+-	tt_entry_t *l2 = (tt_entry_t *)phystokv(l1 & ARM_TTE_TABLE_MASK);
++
++	/* Walk from the root, which is L0 on ugglite (T0SZ=16) and L1 otherwise. */
++	tt_entry_t tte = cpu_tte[(va & ARM_TT_ROOT_INDEX_MASK) >> ARM_TT_ROOT_SHIFT];
++	assert((tte & (ARM_TTE_VALID | ARM_TTE_TYPE_MASK)) == (ARM_TTE_VALID | ARM_TTE_TYPE_TABLE));
++	tt_entry_t *l1 = (tt_entry_t *)phystokv(tte & ARM_TTE_TABLE_MASK);
++#if ARM_TT_ROOT_LEVEL == 0
++	tte = l1[(va & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT];
++	assert((tte & (ARM_TTE_VALID | ARM_TTE_TYPE_MASK)) == (ARM_TTE_VALID | ARM_TTE_TYPE_TABLE));
++	tt_entry_t *l2 = (tt_entry_t *)phystokv(tte & ARM_TTE_TABLE_MASK);
++#else
++	tt_entry_t *l2 = l1;
++#endif
+ 	tt_entry_t *slot = &l2[(va & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT];
+ 
++
+ 	/* One block per 2 MiB of panel, PA advancing with the VA. */
+ 	for (uint64_t i = 0; i < UGG_EARLY_FB_BLOCKS; i++) {
+ 		assert(slot[i] == ARM_TTE_EMPTY);
+@@ -1868,6 +1891,24 @@
+ }
+ #endif
+ 
++/*
++ * Descend from the root table to the L2 table that covers va.
++ *
++ * The root is L0 on ugglite (T0SZ=16, a 48-bit VA) and L1 elsewhere, so the
++ * number of levels between cpu_tte and the L2 differs. The caller has already
++ * made sure every table on the path exists.
++ */
++static tt_entry_t *
++arm_kva_to_l2_table(vm_offset_t va)
++{
++	tt_entry_t *tte = cpu_tte + ((va & ARM_TT_ROOT_INDEX_MASK) >> ARM_TT_ROOT_SHIFT);
++
++#if ARM_TT_ROOT_LEVEL == 0
++	tte = L1_TABLE_VA(tte) + L1_TABLE_INDEX(va);
++#endif
++	return L2_TABLE_VA(tte);
++}
++
+ void
+ arm_vm_init(uint64_t memory_size, boot_args * args)
+ {
+@@ -2166,8 +2207,7 @@
+ 	 *     LOW_GLOBAL_BASE_ADDRESS + 2MB
+ 	 */
+ 	va_l1 = va_l2 = LOW_GLOBAL_BASE_ADDRESS;
+-	cpu_l1_tte = cpu_tte + ((va_l1 & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
+-	cpu_l2_tte = ((tt_entry_t *) phystokv(((*cpu_l1_tte) & ARM_TTE_TABLE_MASK))) + ((va_l2 & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
++	cpu_l2_tte = arm_kva_to_l2_table(va_l2) + ((va_l2 & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
+ 	ptpage_vaddr = alloc_ptpage(TRUE);
+ 	*cpu_l2_tte = (kvtophys(ptpage_vaddr) & ARM_TTE_TABLE_MASK) | ARM_TTE_TYPE_TABLE | ARM_TTE_VALID | ARM_TTE_TABLE_PXN | ARM_TTE_TABLE_XN;
+ 	bzero((void *)ptpage_vaddr, ARM_PGBYTES);
+@@ -2343,19 +2383,19 @@
+ 	va_l1_end += round_page(args->Video.v_height * args->Video.v_rowBytes);
+ 	va_l1_end = (va_l1_end + 0x00000000007FFFFFULL) & 0xFFFFFFFFFF800000ULL;
+ 
+-	cpu_l1_tte = cpu_tte + ((va_l1 & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
++	cpu_l1_tte = cpu_tte + ((va_l1 & ARM_TT_ROOT_INDEX_MASK) >> ARM_TT_ROOT_SHIFT);
+ 
+ 	while (va_l1 < va_l1_end) {
+ 		va_l2 = va_l1;
+ 
+-		if (((va_l1 & ~ARM_TT_L1_OFFMASK) + ARM_TT_L1_SIZE) < va_l1) {
+-			/* If this is the last L1 entry, it must cover the last mapping. */
++		if (((va_l1 & ~ARM_TT_ROOT_OFFMASK) + ARM_TT_ROOT_SIZE) < va_l1) {
++			/* If this is the last root entry, it must cover the last mapping. */
+ 			va_l2_end = va_l1_end;
+ 		} else {
+-			va_l2_end = MIN((va_l1 & ~ARM_TT_L1_OFFMASK) + ARM_TT_L1_SIZE, va_l1_end);
++			va_l2_end = MIN((va_l1 & ~ARM_TT_ROOT_OFFMASK) + ARM_TT_ROOT_SIZE, va_l1_end);
+ 		}
+ 
+-		cpu_l2_tte = ((tt_entry_t *) phystokv(((*cpu_l1_tte) & ARM_TTE_TABLE_MASK))) + ((va_l2 & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
++		cpu_l2_tte = arm_kva_to_l2_table(va_l2) + ((va_l2 & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
+ 
+ 		while (va_l2 < va_l2_end) {
+ 			pt_entry_t *    ptp;
+@@ -2406,19 +2446,19 @@
+ 	va_l1 = (VM_MAX_KERNEL_ADDRESS & CPUWINDOWS_BASE_MASK) - PE_EARLY_BOOT_VA;
+ 	va_l1_end = VM_MAX_KERNEL_ADDRESS;
+ 
+-	cpu_l1_tte = cpu_tte + ((va_l1 & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
++	cpu_l1_tte = cpu_tte + ((va_l1 & ARM_TT_ROOT_INDEX_MASK) >> ARM_TT_ROOT_SHIFT);
+ 
+ 	while (va_l1 < va_l1_end) {
+ 		va_l2 = va_l1;
+ 
+-		if (((va_l1 & ~ARM_TT_L1_OFFMASK) + ARM_TT_L1_SIZE) < va_l1) {
+-			/* If this is the last L1 entry, it must cover the last mapping. */
++		if (((va_l1 & ~ARM_TT_ROOT_OFFMASK) + ARM_TT_ROOT_SIZE) < va_l1) {
++			/* If this is the last root entry, it must cover the last mapping. */
+ 			va_l2_end = va_l1_end;
+ 		} else {
+-			va_l2_end = MIN((va_l1 & ~ARM_TT_L1_OFFMASK) + ARM_TT_L1_SIZE, va_l1_end);
++			va_l2_end = MIN((va_l1 & ~ARM_TT_ROOT_OFFMASK) + ARM_TT_ROOT_SIZE, va_l1_end);
+ 		}
+ 
+-		cpu_l2_tte = ((tt_entry_t *) phystokv(((*cpu_l1_tte) & ARM_TTE_TABLE_MASK))) + ((va_l2 & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
++		cpu_l2_tte = arm_kva_to_l2_table(va_l2) + ((va_l2 & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
+ 
+ 		while (va_l2 < va_l2_end) {
+ 			pt_entry_t *    ptp;

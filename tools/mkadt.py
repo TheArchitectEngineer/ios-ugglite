@@ -103,8 +103,15 @@ def node(name, props=(), children=()):
     return n
 
 
-def build(seed=None, qemu=False, highmem=False, ugglite=False):
-    """qemu=True: QEMU virt addresses; ugglite=True: Redmi Note 5A (MSM8917)."""
+def build(seed=None, qemu=False, highmem=False, ugglite=False, qemu_cpus=False):
+    """qemu=True: QEMU virt addresses; ugglite=True: Redmi Note 5A (MSM8917).
+
+    qemu_cpus=True keeps the ugglite memory map and GIC but writes the CPU
+    'reg' values QEMU's virt machine actually reports in MPIDR_EL1
+    (AFF1=0, AFF0=core), so ml_parse_cpu_topology matches the running core.
+    Without it, an ugglite ADT under QEMU makes ml_get_cpu_number() return -1
+    and machine_routines.c:1244 asserts.
+    """
     if ugglite:
         phys_base, mem_size = UGG_PHYS_BASE, UGG_MEM_SIZE
         timebase = TIMEBASE
@@ -168,7 +175,7 @@ def build(seed=None, qemu=False, highmem=False, ugglite=False):
     # and uses cpus=N to select an initial prefix (N <= 8).
     # QEMU retains its original single-CPU tree: its MPIDRs differ from sweet.
     cpu_nodes = []
-    n_cpus = 1 if qemu else (4 if ugglite else 8)
+    n_cpus = (1 if qemu else 4) if qemu_cpus else (1 if qemu else (4 if ugglite else 8))
     for core in range(n_cpus):
         cpu_nodes.append(node(f'cpu{core}', [
             ph(),
@@ -177,7 +184,10 @@ def build(seed=None, qemu=False, highmem=False, ugglite=False):
              else cstr('qcom,kryo470') + cstr('ARM,v8')),
             # actual MPIDR Aff1:Aff0, NOT logical ID. ugglite's DT uses
             # 0x100..0x103 (Aff1=1), matching the live /cpus nodes.
-            ('reg', u32(0x100 + core if ugglite else (core << 8))),
+            # QEMU's virt machine reports AFF1=0, so the ugglite ADT's
+            # 0x100..0x103 does not match it; qemu_cpus writes what QEMU
+            # really puts in MPIDR_EL1 (0, 1, 2, ...).
+            ('reg', u32(core if qemu_cpus else (0x100 + core if ugglite else (core << 8)))),
             ('cpu-id', u32(core)),   # descriptive: XNU assigns IDs by DT order
             ('cluster-id', u32(0)),  # descriptive; see ml_parse_cpu_topology
             ('cluster-type', u32(0)),  # homogeneous CLUSTER_TYPE_SMP, not AMP
@@ -279,7 +289,8 @@ def build(seed=None, qemu=False, highmem=False, ugglite=False):
 
 if __name__ == '__main__':
     root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv,
-                 ugglite='--ugglite' in sys.argv)
+                 ugglite='--ugglite' in sys.argv,
+                 qemu_cpus='--qemu-cpus' in sys.argv)
     blob = adt.serialize(root)
     open(sys.argv[1], 'wb').write(blob)
     if '--dump' in sys.argv:
