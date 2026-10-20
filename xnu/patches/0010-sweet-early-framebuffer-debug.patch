@@ -132,7 +132,7 @@ index ccbb188..777aca4 100644
  	// Set low reset vector before attempting any loads
  	adrp	x0, EXT(LowExceptionVectorBase)@page
  	add		x0, x0, EXT(LowExceptionVectorBase)@pageoff
-@@ -609,6 +628,37 @@ Lkernelcache_base_found:
+@@ -609,6 +628,27 @@ Lkernelcache_base_found:
  	lsr		x5,  x24, #(ARM_TT_L2_SHIFT)
  	create_bootstrap_mapping x14, x15, x5, x3, x2, x9, x10, x11, x12, x13
  
@@ -159,16 +159,6 @@ index ccbb188..777aca4 100644
 +
  	/* Ensure TTEs are visible */
  	dsb		ish
-+#if defined(BOARD_UGGLITE)
-+	/* Marker: bootstrap page tables built. */
-+	MOV64	x10, 0x90000000
-+	mov		w11, #0xff0000ff
-+	mov		x12, #64
-+1:	str		w11, [x10], #4
-+	subs	x12, x12, #1
-+	b.ne	1b
-+	dsb		sy
-+#endif
  
 diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
 new file mode 100644
