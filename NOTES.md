@@ -103,7 +103,88 @@ font. Results on emulated hardware:
 This is the same verdict expected from the real MSM8917, since QEMU's A53 model
 reports the same ID_AA64MMFR0 value.
 
+### >>> HARDWARE RESULT 2026-10-20: ugglite boots our shim, 16K granule ABSENT <<<
+
+**The shim now boots on the real Redmi Note 5A and draws to the panel.** This is
+the first code from this project to run on ugglite. Measured on the device:
+
+- `MIDR = 0x410FD034` -> implementer 0x41, part **0xD03 = Cortex-A53**, rev 4.
+- `ID_AA64MMFR0_EL1 = 0x00001122` -> PARange 2 (40-bit), TGran4 = 0 (supported),
+  **TGran16 = 0 (NOT SUPPORTED)**, TGran64 = 0 (supported).
+  **=> The 16K page-size question is answered: ugglite cannot run a 16K-granule
+  kernel.** This matches QEMU's cortex-a53 model exactly (0x1122), so the host
+  rehearsal was faithful. The port must use the mixed-page-size path
+  (`ARM_PARAMETERIZED_PMAP` + `__ARM_MIXED_PAGE_SIZE__`, the A7/A8 arrangement)
+  or a 4K-native XNU configuration. This is now the gating design decision, not
+  a hypothesis.
+
+Remaining facts, read from the live device tree (`/proc/device-tree`, Android 15
+with root; they agree with the stock MIUI DTB #07 and the mainline DTS):
+- **Memory: two banks, 0x80000000 + 1 GiB and 0xc0000000 + 1 GiB = 2 GiB total**
+  (this is the 2 GB variant; MemTotal 1,865,708 kB). There is no upper bank, so
+  `tools/mkadt.py`'s highmem layout does not apply and the XNU phys_base must
+  live in the 32-bit PA space below the carve-outs.
+- **Reserved memory** (live): other_ext 0x84a00000+0x1e00000, modem
+  0x86800000+0x5000000, adsp_fw 0x8bd00000+0x1100000, wcnss_fw
+  0x8ce00000+0x700000, splash 0x90000000+0x1400000, ramoops 0xb0000000+0x800000.
+- **GIC**: `qcom,msm-qgic2` at 0x0b000000 (distributor) and 0x0b002000 (CPU
+  interface) -> **GICv2**, as expected.
+- **Timer**: PPI 2/3/4/1 = secure-phys, phys, **virt = PPI 4 = INTID 20**, hyp =
+  PPI 1 = 17. `CNTFRQ = 0x124f800` = 19.2 MHz. (sweet uses INTID 19.)
+- **PSCI**: `arm,psci-1.0`, method `smc`. **Bootloader: lk** (`fastboot getvar
+  kernel:lk`, product ugglite) - NOT lk2nd, so nothing mainline-aware is in the
+  boot chain.
+- **Storage**: eMMC `mmcblk0` = 14,567,840 KiB (~14.5 GiB, 16 GB variant), SDHCI
+  at `7824900.sdhci`; partitions are Android (boot/system/userdata...).
+- **Panel**: 720x1280, DSI video mode, 60 Hz; Android's fb0 reports
+  `virtual_size 720,2560`, `stride 2944`, `bits_per_pixel 32` (double buffered).
+  **But the ABL splash the shim draws into is a different buffer**: 24 bpp RGB888,
+  720x1280, at 0x90000000 (splash_region). Pixel order is R,G,B (red.offset 0 /
+  green 8 / blue 16 in the Android fb, which is the same little-endian byte
+  order), so a 32-bit store must NOT be used - see the bugs below.
+
+**Boot-image format (learned the hard way):** this lk wants **`Image.gz-dtb`**,
+i.e. a **gzip-compressed kernel with the DTB appended after the gzip stream**,
+inside a **header v0, 2048-byte-page** boot.img. Symptoms when wrong:
+- raw uncompressed `Image` -> `FAILED (remote: 'dtb not found')` or a hang;
+- DTB appended to the boot image instead of the kernel -> same;
+- correct format -> `Booting OKAY`, and the device drops off USB because our
+  code never re-enumerates (that is success, not failure).
+`shim/build.sh` now produces this layout for `BOARD=ugglite`
+(`gzip -9 -n out/Image` then `cat dtb`), with kernel 0x80008000 / ramdisk
+0x81000000 to match the stock image.
+
+**Bugs found and fixed during the hardware bring-up (all in the shim):**
+1. **32-bit store into a 24 bpp buffer.** The glyph path wrote `u32` pixels while
+   the console declared 24 bpp, so text came out as diagonal garbage ("old TV
+   noise"). Solid fills used the byte path and looked fine, which is what made
+   this confusing. Fixed: the 24 bpp branch does three byte stores.
+2. **Wrong assumptions about the splash geometry.** Android's fb0 (32 bpp,
+   stride 2944, double buffered, ION-allocated, `smem_start = 0`) is NOT the
+   buffer ABL leaves for us. The splash_region is 24 bpp, stride 2160.
+3. clang-only build issues: `-fno-jump-tables` (else the panic string select
+   becomes a `.rodata` address table needing an absolute relocation) and a local
+   `streq` (clang emitted a real `strcmp` call).
+
+**Tooling added:** `tools/fbinfo.c` - a static aarch64 probe that prints
+`smem_start`, stride, geometry and channel offsets via FBIOGET_FSCREENINFO /
+FBIOGET_VSCREENINFO; build with
+`clang --target=aarch64-linux-gnu -static -nostdlib -fno-builtin -fuse-ld=lld`.
+`tools/qemu-probe.py` rehearses the whole probe on QEMU virt (GICv2, cortex-a53)
+before a phone boot.
+
+**Phone state:** Android 15 (LineageOS kernel 4.19.325), rooted via `adb root`
+(no `su` binary; `adb shell` is uid 0 with context u:r:su:s0 after `adb root`).
+Boot partition backed up to `backup-ugglite/boot-stock.img` (64 MiB, SHA256
+866afbfd...), byte-identical after all `fastboot boot` tests - nothing was
+written to flash. `fastboot boot` is non-destructive; the phone recovers by
+itself after the probe's ~3 min wait + reset.
+
 **NEXT (in order):**
+0. **Decide the page-size strategy before writing any more code.** Read
+   `osfmk/arm/pmap/pmap.c` and `pmap_pt_geometry.h` for `__ARM_MIXED_PAGE_SIZE__`
+   / `ARM_PARAMETERIZED_PMAP` and confirm 4K-hardware + 16K-userspace works in
+   xnu-8796. If it does not, the ugglite port is not viable as an iOS 16 port.
 1. `fastboot boot shim/out/shim-boot-ugglite.img` on the Note 5A with the phone
    in fastboot. Expected: red "SHIM ugglite loader + board probe" screen, then
    the probe results, then reset in ~3 min.

@@ -8,3 +8,6 @@ shim/out/
 xnu/out/
 xnu/out-*/
 __pycache__/
+
+# device boot partition backups (per-device image, keep out of git)
+backup-ugglite/

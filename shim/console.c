@@ -29,6 +29,10 @@ static inline void con_put(int x, int y, uint32_t c)
 	volatile uint8_t *p = (volatile uint8_t *)con_fb + (uintptr_t)y * FB_STRIDE + x * FB_BPP;
 
 #if FB_BPP == 4
+#if FB_SWAP_RB
+	/* Colour constants are 0xAARRGGBB; this panel stores 0xAABBGGRR. */
+	c = (c & 0xff00ff00U) | ((c & 0x00ff0000U) >> 16) | ((c & 0x000000ffU) << 16);
+#endif
 	*(volatile uint32_t *)p = c;
 #else
 	/* 0xRRGGBB in the low 24 bits; r8g8b8 means byte order R,G,B. */
@@ -43,25 +47,64 @@ void con_clear(uint32_t bg)
 	for (int y = 0; y < FB_H; y++)
 		for (int x = 0; x < FB_W; x++)
 			con_put(x, y, bg);
+	/* Mirror the background into every other frame the panel may scan out. */
+	for (int f = 1; f < FB_FRAMES; f++) {
+		volatile uint32_t *dst = (volatile uint32_t *)((volatile uint8_t *)con_fb
+							       + (uintptr_t)f * FB_FRAME_BYTES);
+		uint32_t c = bg;
+#if FB_BPP == 4 && FB_SWAP_RB
+		c = (c & 0xff00ff00U) | ((c & 0x00ff0000U) >> 16) | ((c & 0x000000ffU) << 16);
+#endif
+		for (int i = 0; i < FB_FRAME_BYTES / 4; i++)
+			dst[i] = c;
+	}
 	con_bg = bg;
 	row = 0;
 }
 
-static void put_char(int col, char ch, uint32_t fg)
+/*
+ * Draw one character into one frame. `base` is the frame's start; frame 0 is
+ * con_fb itself.
+ */
+static void put_char_in(volatile uint8_t *base, int col, char ch, uint32_t fg)
 {
 	if (ch < 0x20 || ch > 0x7e)
 		ch = '?';
 	const unsigned char *g = font8x16[ch - 0x20];
 	int x0 = MARGIN + col * CH_W, y0 = MARGIN + row * CH_H;
+
 	if (x0 + CH_W > FB_W || y0 + CH_H > FB_H)
 		return;
 	for (int gy = 0; gy < 16; gy++)
 		for (int gx = 0; gx < 8; gx++) {
 			uint32_t c = (g[gy] & (0x80 >> gx)) ? fg : con_bg;
+#if FB_BPP == 4 && FB_SWAP_RB
+			c = (c & 0xff00ff00U) | ((c & 0x00ff0000U) >> 16) |
+			    ((c & 0x000000ffU) << 16);
+#endif
 			for (int sy = 0; sy < SCALE; sy++)
-				for (int sx = 0; sx < SCALE; sx++)
-					con_put(x0 + gx * SCALE + sx, y0 + gy * SCALE + sy, c);
+				for (int sx = 0; sx < SCALE; sx++) {
+					volatile uint8_t *p = base +
+					    (uintptr_t)(y0 + gy * SCALE + sy) * FB_STRIDE +
+					    (uintptr_t)(x0 + gx * SCALE + sx) * FB_BPP;
+#if FB_BPP == 4
+					*(volatile uint32_t *)p = c;
+#else
+					/* 24 bpp: three bytes, never a 32-bit store. */
+					p[0] = (uint8_t)(c >> 16);
+					p[1] = (uint8_t)(c >> 8);
+					p[2] = (uint8_t)c;
+#endif
+				}
 		}
+}
+
+/* Every glyph is drawn into all frames, so whichever one scans out shows it. */
+static void put_char(int col, char ch, uint32_t fg)
+{
+	for (int f = 0; f < FB_FRAMES; f++)
+		put_char_in((volatile uint8_t *)con_fb + (uintptr_t)f * FB_FRAME_BYTES,
+			    col, ch, fg);
 }
 
 static int put_str(int col, const char *s, uint32_t fg)

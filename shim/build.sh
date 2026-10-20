@@ -20,10 +20,25 @@ case "$BOARD" in
 sweet)
 	BOARD_DEFS=""
 	DTB="${DTB:-../dtb/boot_unpacked/dtb}"
+	BOOT_HDR=2
+	BOOT_PAGESIZE=4096
+	BOOT_BASE=0
+	BOOT_KDELTA=0x8000
+	BOOT_RDELTA=0x1000000
+	BOOT_TAGS=0x100
 	;;
 ugglite)
 	BOARD_DEFS="-DBOARD_UGGLITE"
 	DTB="${DTB:-../dtb/ugglite.dtb}"
+	# The stock MSM8917 boot.img is header v0, 2048-byte pages, kernel at
+	# 0x80008000, and the DTB appended after the ramdisk (not a v2 --dtb
+	# section). Match it: this ABL predates header v2.
+	BOOT_HDR=0
+	BOOT_PAGESIZE=2048
+	BOOT_BASE=0x80000000
+	BOOT_KDELTA=0x8000
+	BOOT_RDELTA=0x1000000
+	BOOT_TAGS=0x100
 	;;
 qemu)
 	BOARD_DEFS="-DBOARD_QEMU"
@@ -93,11 +108,30 @@ fi
 
 [ -f "$DTB" ] || { echo "error: DTB not found: $DTB (set DTB=...)" >&2; exit 1; }
 
-mkbootimg --header_version 2 --kernel out/Image --ramdisk out/ramdisk.bin \
-	--dtb "$DTB" --base 0 --kernel_offset 0x8000 --ramdisk_offset 0x1000000 \
-	--tags_offset 0x100 --dtb_offset 0x1f00000 --pagesize 4096 \
-	--os_version 17.0.0 --os_patch_level 2035-06 \
-	--cmdline "console=null" -o "out/shim-boot-$BOARD.img"
+if [ "$BOOT_HDR" = 2 ]; then
+	mkbootimg --header_version 2 --kernel out/Image --ramdisk out/ramdisk.bin \
+		--dtb "$DTB" --base "$BOOT_BASE" --kernel_offset "$BOOT_KDELTA" \
+		--ramdisk_offset "$BOOT_RDELTA" --tags_offset "$BOOT_TAGS" \
+		--dtb_offset 0x1f00000 --pagesize "$BOOT_PAGESIZE" \
+		--os_version 17.0.0 --os_patch_level 2035-06 \
+		--cmdline "console=null" -o "out/shim-boot-$BOARD.img"
+else
+	# Header v0 and this lk wants Image.gz-dtb: a GZIP-compressed kernel with
+	# the DTB appended after the gzip stream. lk decompresses the kernel and
+	# then looks for the DTB past it.
+	#   - raw Image        -> lk cannot decompress, reports "dtb not found"
+	#                         or hangs (both seen on ugglite 2026-10-20)
+	#   - DTB after image  -> same, the DTB is not where lk looks
+	# gzip -n: no timestamp/filename, so builds are reproducible.
+	gzip -9 -n -c out/Image > out/kernel.gz
+	cp out/kernel.gz out/kernel-dtb
+	cat "$DTB" >> out/kernel-dtb
+	mkbootimg --header_version 0 --kernel out/kernel-dtb --ramdisk out/ramdisk.bin \
+		--base "$BOOT_BASE" --kernel_offset "$BOOT_KDELTA" \
+		--ramdisk_offset "$BOOT_RDELTA" --tags_offset "$BOOT_TAGS" \
+		--pagesize "$BOOT_PAGESIZE" \
+		--cmdline "console=null" -o "out/shim-boot-$BOARD.img"
+fi
 
 # Host render of the console layout (sweet geometry only).
 if [ "$BOARD" = sweet ] && command -v gcc >/dev/null; then

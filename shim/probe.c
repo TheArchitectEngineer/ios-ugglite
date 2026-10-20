@@ -170,7 +170,7 @@ static void print_reserved(uintptr_t fdt)
 		if (!p || len < 16)
 			continue;
 		n++;
-		if (shown < 5) {
+		if (shown < 3) {
 			uint64_t base = fdt_be64(p);
 			uint64_t size = fdt_be64((const uint8_t *)p + 8);
 			con_hex2("RESV", "at=", (uint32_t)base, "sz=", (uint32_t)size);
@@ -290,8 +290,13 @@ void probe_main(uint64_t dtb)
 	int has16 = gran16_supported(mmfr0);
 
 	con_clear(BLUE);
+	/*
+	 * Headline first: the screen holds ~38 rows and the probe prints more
+	 * than that, so the answer that decides the port goes on top where it
+	 * cannot scroll off.
+	 */
 	con_str("PROBE", BOARD_NAME " board probe");
-	con_skip();
+	con_str("16K GRANULE", has16 ? "SUPPORTED" : "NOT SUPPORTED");
 
 	/* Everything that cannot hang the CPU is printed before the AT tests. */
 	con_hex2("MIDR", "=", (uint32_t)rsr("midr_el1"),
@@ -300,8 +305,6 @@ void probe_main(uint64_t dtb)
 	con_hex2("PFR0", "lo=", (uint32_t)rsr("id_aa64pfr0_el1"),
 		 "isar0=", (uint32_t)rsr("id_aa64isar0_el1"));
 	con_hex2("CNTFRQ", "=", (uint32_t)rsr("cntfrq_el0"), 0, 0);
-	con_str("GRANULE", has16 ? "ID: 16K SUPPORTED" : "ID: 16K NOT SUPPORTED");
-	con_skip();
 
 	con_hex2("FDT", "at=", (uint32_t)dtb, "magic=", (uint32_t)fdt_be32((const void *)dtb));
 	if (dtb) {
@@ -317,10 +320,8 @@ void probe_main(uint64_t dtb)
 		print_timer(dtb);
 		print_reserved(dtb);
 	}
-	con_skip();
 
 	print_gic();
-	con_skip();
 
 	/*
 	 * 4K is mandatory on every ARMv8 CPU, so this AT validates the page
@@ -347,6 +348,5 @@ void probe_main(uint64_t dtb)
 					       : "16K granule usable");
 	}
 
-	con_skip();
 	con_str("PROBE", "done");
 }

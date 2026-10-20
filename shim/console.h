@@ -2,7 +2,19 @@
 #include <stdint.h>
 #include "board.h"
 
-#define FB_STRIDE	(FB_W * FB_BPP)	/* bytes per line */
+#ifndef FB_STRIDE_BYTES
+#define FB_STRIDE_BYTES	(FB_W * FB_BPP)
+#endif
+#define FB_STRIDE	FB_STRIDE_BYTES	/* bytes per line */
+#ifndef FB_FRAMES
+#define FB_FRAMES	1
+#endif
+#ifndef FB_FRAME_BYTES
+#define FB_FRAME_BYTES	(FB_STRIDE_BYTES * FB_H)
+#endif
+#ifndef FB_SWAP_RB
+#define FB_SWAP_RB	0
+#endif
 
 #define RED	0xffff0000U
 #define BLUE	0xff0000a0U

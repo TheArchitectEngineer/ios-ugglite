@@ -65,10 +65,14 @@
 #define FB_PHYS		0x90001000UL
 #endif
 #define FB_PHYS_ALT	0x90000000UL
+/* Whole splash_region per the stock DTB: <0x90000000 0x1400000>. */
+#define FB_REGION_BASE	0x90000000UL
+#define FB_REGION_SIZE	0x1400000UL
 #define FB_W		720
 #define FB_H		1280
 #define FB_BPP		3		/* RGB888, mainline format "r8g8b8" */
-#define FB_SCALE	2		/* console glyph scale */
+#define FB_SCALE	2
+#define FB_SWAP_RB	0
 
 /* qcom,msm-qgic2: GICv2, distributor + CPU interface in two frames. */
 #define GICD_BASE	0x0b000000UL
