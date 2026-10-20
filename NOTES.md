@@ -28,15 +28,18 @@ the post-MMU store. The loaded `sysreg_restore.tcr_el1` is
 `0xfffffe0007004000`, outside that range. This is the structural error in the
 original 4K port.
 
-Patch 0086 (`ugglite-ttbr1-l0-bootstrap`) changes only Ugglite's TTBR1 boot
-range to `T1SZ=23`, which contains the `0xfffffe...` kernel VA, and adds the
-necessary TTBR1 L0 root in `start.s`. TTBR0 retains its existing L1 identity
-map (`T0SZ=26`). The revised table layout is: V=P L1, KVA L0, KVA L1, V=P L2,
-KVA L2; the framebuffer entries move to the V=P L2 at page 4. The eight-page
-bootstrap reservation is sufficient. The patch was generated from the matching
-CI build tree, dry-run applied there, and its Ugglite `start.s` assembled
-locally. `python3 tools/validate-repo.py` passed for patches 0001-0086. CI
-and the next temporary hardware boot are pending.
+Patch 0086 established the required TTBR1 L0 mapping, but CI run
+`39414131141` was cancelled before it completed when review found that
+`T0SZ=26` would disagree with pmap's 4K root geometry. Patch 0087 completes
+the correct configuration: both `T0SZ` and `T1SZ` are 23, making TTBR0 and
+TTBR1 41-bit/L0 walks. The revised layout is V=P L0/L1, KVA L0/L1, V=P L2,
+KVA L2; the framebuffer entries move to V=P L2 at page 5 and TTBR1 points to
+the KVA L0 at page 3. The eight-page reservation is sufficient. Patches 0086
+and 0087 were generated from the matching CI build tree, dry-run applied
+there, and the resulting Ugglite `start.s` assembled locally. Preprocessing
+confirmed both size fields are 23; disassembly confirmed the two L0 entries
+and TTBR1 page-3 load. `python3 tools/validate-repo.py` passed for patches
+0001-0087. The replacement CI build and temporary hardware boot are pending.
 
 **Hardware observation (user-reported, 2026-10-20):** the prior test showed
 yellow, cyan, magenta, green, blue, red, black, red, green and blue bands, with

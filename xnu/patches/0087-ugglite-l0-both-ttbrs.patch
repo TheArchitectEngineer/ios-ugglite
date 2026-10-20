@@ -1,0 +1,103 @@
+--- a/osfmk/arm64/proc_reg.h
++++ b/osfmk/arm64/proc_reg.h
+@@ -950,7 +950,9 @@
+ #define T0SZ_BOOT 17ULL
+ #endif /* !__ARM64_PMAP_SUBPAGE_L1__ */
+ #else /* __ARM_16K_PG__ */
+-#if __ARM64_PMAP_SUBPAGE_L1__
++#if defined(UGGLITE)
++#define T0SZ_BOOT 23ULL
++#elif __ARM64_PMAP_SUBPAGE_L1__
+ #define T0SZ_BOOT 26ULL
+ #else /* __ARM64_PMAP_SUBPAGE_L1__ */
+ #define T0SZ_BOOT 25ULL
+@@ -970,8 +972,9 @@
+ #else /* __ARM_16K_PG__ */
+ #if defined(UGGLITE)
+ /*
+- * VM_KERNEL_LINK_ADDRESS is 0xfffffe0000000000.  A 4K TTBR1 walk therefore
+- * needs a level-0 root (T1SZ=23) instead of the generic 256GB L1-only range.
++ * VM_KERNEL_LINK_ADDRESS is 0xfffffe0000000000.  Both 4K translation regions
++ * therefore need level-0 roots (TSZ=23), rather than the generic 256GB L1
++ * configuration. Keeping T0SZ and T1SZ equal also matches pmap geometry.
+  */
+ #define T1SZ_BOOT 23ULL
+ #elif __ARM64_PMAP_SUBPAGE_L1__
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -717,22 +717,23 @@
+ 	mov		x15, x23
+ 
+ 	/*
+-	 * Allocate L1 tables
+-	 * x1 - V=P L1 page
+-	 * x3 - KVA L1 page
+-	 * x2 - free mem pointer from which we allocate a variable number of L2
+-	 * pages. The maximum number of bootstrap page table pages is limited to
++	 * Allocate bootstrap tables.
++	 * x1/x3 - V=P L0/L1 pages
++	 * x2/x27 - KVA L0/L1 pages
++	 * x28 - free memory pointer for L2 pages. The maximum number of bootstrap
++	 * page table pages is limited to
+ 	 * BOOTSTRAP_TABLE_SIZE. For a 2G 4k page device, assuming the worst-case
+-	 * slide, we need 1xL1 and up to 3xL2 pages (1GB mapped per L1 entry), so
+-	 * 8 total pages for V=P and KVA.
++	 * slide, two roots and four L2 pages fit in eight pages.
+ 	 */
+ 	mov		x1, x25
+ 	add		x3, x1, PGBYTES
+ #if defined(BOARD_UGGLITE)
+-	/* V=P L1, KVA L0, KVA L1; L2 pages follow. */
++	/* V=P L0/L1, KVA L0/L1; L2 pages follow. */
+ 	add		x2, x3, PGBYTES
+-	mov		x27, x2
+-	create_l0_table_entry x14, x3, x27, x6, x7, x8
++	add		x27, x2, PGBYTES
++	mov		x28, x27
++	create_l0_table_entry x0, x1, x3, x6, x7, x8
++	create_l0_table_entry x14, x2, x27, x6, x7, x8
+ #else
+ 	mov		x2, x3
+ #endif
+@@ -743,7 +744,11 @@
+ 	 */
+ 	lsr		x5,  x24, #(ARM_TT_L2_SHIFT)
+ 	/* create_bootstrap_mapping(vbase, pbase, num_ents, L1 table, freeptr) */
++#if defined(BOARD_UGGLITE)
++	create_bootstrap_mapping x0, x4, x5, x3, x28, x6, x10, x11, x12, x13
++#else
+ 	create_bootstrap_mapping x0,  x4,  x5, x1, x2, x6, x10, x11, x12, x13
++#endif
+ #if defined(BOARD_UGGLITE)
+ 	/* marker 1: 0xffff00 */
+ 	movz	x10, #0x9000, lsl #16
+@@ -767,7 +772,7 @@
+ 	/* Setup the KVA bootstrap mapping */
+ 	lsr		x5,  x24, #(ARM_TT_L2_SHIFT)
+ #if defined(BOARD_UGGLITE)
+-	create_bootstrap_mapping x14, x15, x5, x27, x2, x9, x10, x11, x12, x13
++	create_bootstrap_mapping x14, x15, x5, x27, x28, x9, x10, x11, x12, x13
+ #else
+ 	create_bootstrap_mapping x14, x15, x5, x3, x2, x9, x10, x11, x12, x13
+ #endif
+@@ -809,7 +814,7 @@
+ 	and		x12, x10, #(ARM_TT_L2_INDEX_MASK)
+ 	lsr		x12, x12, #(ARM_TT_L2_SHIFT)
+ #if defined(BOARD_UGGLITE)
+-	add		x13, x25, #(3 * PGBYTES)
++	add		x13, x25, #(4 * PGBYTES)
+ #else
+ 	add		x13, x25, #(2 * PGBYTES)
+ #endif
+@@ -913,7 +918,11 @@
+ 	mov		x19, lr
+ 	bl		EXT(set_mmu_ttb)
+ 	mov		lr, x19
++#if defined(BOARD_UGGLITE)
++	add		x0, x25, #(2 * PGBYTES)
++#else
+ 	add		x0, x25, PGBYTES
++#endif
+ 	and		x0, x0, #(TTBR_BADDR_MASK)
+ 	MSR_TTBR1_EL1_X0
+ #if defined(BOARD_UGGLITE)
