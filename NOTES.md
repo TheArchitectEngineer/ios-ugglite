@@ -405,6 +405,25 @@ no exact-string `SWEET` comparisons remain in scripts, Makefiles or the
 workflow, and no config file is duplicated per board except the two MASTERs,
 which are now kept in step.
 
+**Build 9: SWEET_FAMILY was a header macro but most users never include the
+header (2026-10-20).** Identical 8 undefined symbols, even though the MASTER fix
+landed and `sweet_amfi.o`, `sweet_ufs.o`, `sweet_sha2big.o` all compiled. The
+objects compiled *empty*: those files open with `#if defined(SWEET_FAMILY)` and
+then include only kernel headers - never `pexpert/arm64/board_config.h` - so the
+macro was undefined and the body was #if'd out. The old
+`ARM64_BOARD_CONFIG_SWEET` worked in those files precisely because it was a
+**compiler flag**, not a header definition.
+
+**Lesson:** when replacing a `-D` compiler define with a header define, check
+which users actually include the header. An audit found 20+ files across
+osfmk, bsd and iokit testing `SWEET_FAMILY` without including board_config.h
+(exception.c, serial_console.c, vm_unix.c, kpi_vfs.c, the pthread sources,
+in.c, rtsock.c, kern_mib.c, kern_exec.c, kern_exit.c, bsd_init.c, sweet_usb.c,
+sweet_touch.c, sweet_rpmh.c, IOUserClient.cpp, ...). `MACHINE_FLAGS_ARM64_UGGLITE`
+now carries `-DSWEET_FAMILY`, which reaches every TU; the header definition is
+kept as a harmless duplicate for files that do include it. Rebuild is run
+39365727069.
+
 **GICv2 IPI fixed in patch 0083 (2026-10-20).** `SweetCPU::signalCPU()`
 (patch 0018, rewritten by 0065) sent the cross-CPU signal with
 `ICC_SGI1R_EL1`, a GICv3 system register that a GICv2 CPU interface does not
