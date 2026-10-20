@@ -19,13 +19,14 @@ index 8460893..9a748ea 100644
  
  
  #
-@@ -259,8 +260,12 @@ ifeq ($(ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG),)
+@@ -259,8 +260,13 @@ ifeq ($(ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG),)
  # Without embdedded device map, use a default arch string
  export ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG := $(shell echo $(CURRENT_ARCH_CONFIG) | tr A-Z a-z)
  ifneq ($(filter arm64,$(ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG)),)
 +# Neither target has pointer authentication: Cortex-A76/A55 (sweet) and
 +# Cortex-A53 (ugglite) are ARMv8.0/8.2 without PAC. Stay plain arm64.
-+ifneq ($(filter $(CURRENT_MACHINE_CONFIG),SWEET UGGLITE),)
++# ifeq (not ifneq): arm64e is only for the OTHER machine configs.
++ifeq ($(filter $(CURRENT_MACHINE_CONFIG),SWEET UGGLITE),)
  export ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG := arm64e
  endif
 +endif
