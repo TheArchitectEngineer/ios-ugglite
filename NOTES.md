@@ -5,9 +5,19 @@
 ### >>> ACTIVE: port iOS to ugglite; verify the post-MMU framebuffer path <<<
 
 The project goal is to boot iOS on the Redmi Note 5A (`ugglite`). The phone is
-currently in Android per the user's latest report. Do not reboot it or run
-device commands until the user says it is in fastboot. Use temporary
-`fastboot boot` images only; do not flash partitions.
+now executing the temporary 0085 diagnostic image after an ADB reboot from
+Android. Use temporary `fastboot boot` images only; do not flash partitions.
+
+**Hardware test initiated (2026-10-20 11:09:06 UTC):** the phone was visible
+over ADB as serial `444fe4c1`, product `lineage_Mi8937_4_19`, model
+`Redmi_Note_5A`, device `ugglite`. `adb -s 444fe4c1 reboot bootloader` exposed
+the same serial in fastboot. The host verified
+`shim/out/shim-boot-0085-fbmap.img` SHA256
+`9c19b2258b5d2beb0fa6242907ab3d618c3b90e31cbeea9be2a3e4a6df71d4b0`, then
+`fastboot -s 444fe4c1 boot shim/out/shim-boot-0085-fbmap.img` returned
+`Sending ... OKAY` and `Booting ... OKAY` (1.103 s total). This confirms
+bootloader transport only. The panel observation is still required to establish
+whether the row-160 post-MMU marker or the solid-green `arm_init` fill appears.
 
 **Hardware observation (user-reported, 2026-10-20):** the prior test showed
 yellow, cyan, magenta, green, blue, red, black, red, green and blue bands, with
