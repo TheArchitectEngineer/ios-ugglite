@@ -57,6 +57,35 @@ Note `MH_DYLIB_IN_CACHE` is **not** set in our kernel and the first load
 command *is* `LC_SEGMENT_64`, so the slide-rebase path is skipped - that
 self-loop (`bne .` at `0xfffffe00074281d4`) is not the one being hit.
 
+**Research notes on the start.s hang (2026-10-20).** What the bootstrap path
+actually does, so the next session does not have to rediscover it:
+
+- `__start` is `b start_first_cpu`. `start_first_cpu` reads virtBase, physBase,
+  memSize and boot_flags from boot_args (offsets 8/16/24/0x2d0), sets
+  `VBAR_EL1`, builds the exception and interrupt stacks, and loads `arm_init`
+  into lr - each converted with `addr + virtBase - physBase`.
+- That conversion is **correct and consistent with the shim**: the shim places
+  a symbol at `link_VA + (payload.phys_base - payload.virt_base)`, and XNU
+  computes exactly the same value. Verified numerically: `bootstrap_pagetables`
+  (link VA `0xfffffe0007176000`) lands at PA `0x8d676000`, which is inside our
+  RAM window. So the "adrp with the MMU off is wrong" worry is unfounded -
+  the arithmetic deliberately produces a PA.
+- The bootstrap mapping is built with `create_bootstrap_mapping`, which needs
+  `memSize >> ARM_TT_L2_SHIFT` = `0x2b00000 >> 21` = **21 L2 entries** (2 MB
+  blocks, 4K granule). Starting L2 index for `virt_base` is 56, so 456 entries
+  are available in one page - it fits in one L2 page, well inside
+  `BOOTSTRAP_TABLE_SIZE` (8 pages for 4K).
+- The MMU is enabled later, at `MSR_SCTLR_EL1_X0` with `SCTLR_EL1_DEFAULT =
+  0x3414513d`. SWEET is exempt from the `cmp SCTLR/bne .` self-check.
+- **`TCR_TBI0_TOPBYTE_IGNORED` (bit 37) is set unconditionally** in
+  `osfmk/arm64/proc_reg.h`. TBI is ARMv8.1+; the A53 reports
+  `ID_AA64ISAR0_EL1[23:20] = 0`, i.e. **no TBI**. So the kernel programs a
+  RES0 bit and relies on top-byte-ignore semantics it does not have. This is
+  the leading suspect after the page tables: it changes how the `0xfffffe...`
+  kernel VAs translate. A guarded fix is prepared (clear the bit for
+  `BOARD_UGGLITE`) but was NOT applied until the marker shows the hang is past
+  the page-table construction.
+
 **NEXT CONCRETE ACTION:** work out what `start.s` computes for the bootstrap
 mapping and compare it against the ADT. The useful inputs are
 `VM_KERNEL_LINK_ADDRESS`, `boot_args->memSize`, `physBase`, `topOfKernelData`
