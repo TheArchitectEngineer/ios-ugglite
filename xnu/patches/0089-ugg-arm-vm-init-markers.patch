@@ -64,7 +64,7 @@
  #endif
  
  
-@@ -2179,12 +2187,14 @@
+@@ -2179,21 +2187,27 @@
  #endif /* MONOTONIC */
  
  	arm_set_user_tbi();
@@ -77,8 +77,21 @@
  	arm_vm_physmap_init(args);
 +	sweet_early_mark(30, "arm_vm_physmap_init done");
  	set_mmu_ttb_alternate(cpu_ttep & TTBR_BADDR_MASK);
++	sweet_early_mark(31, "TTBR1 = final cpu_ttep");
  
  	ml_enable_monitor();
++	sweet_early_mark(32, "ml_enable_monitor done");
+ 
+ #if defined(SWEET)
+ 	/* The final TTBR1 is live; leave the outgoing VA=PA framebuffer alias. */
+ 	sweet_early_relocate(UGG_EARLY_FB_VA);
++	sweet_early_mark(33, "early console relocated to TTBR1 VA");
+ #endif
+ 	set_mmu_ttb(invalid_ttep & TTBR_BADDR_MASK);
++	sweet_early_mark(34, "TTBR0 = invalid_ttep");
+ 
+ 	flush_mmu_tlb();
+ 	sweet_early_mark(10, "TTBR0 off; TLB flushed");
 --- a/osfmk/arm64/sweet_early.c
 +++ b/osfmk/arm64/sweet_early.c
 @@ -29,6 +29,14 @@
