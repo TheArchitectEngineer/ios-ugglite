@@ -462,6 +462,42 @@ just to see `SWEET GIC: v2 distributor ...` and the timer firing.
      `board_config.h` -> empty objects; fixed with `-DSWEET_FAMILY`
 10. **passed**
 
+**First hardware boot attempt 2026-10-20: shim runs, XNU does not yet.**
+
+What works on the phone (probe screen, read off the panel):
+`MIDR 410FD034` (A53), `MMFR0 0x1122` (16K absent), `MEM 80000000 +40000000`,
+`CPUS 4`, `GICCOMPAT qcom,msm-qgic2`, `GICD iidr=1070 typer=046A` ->
+**4 CPUs, SecurityExtn=1**, `GICC ctlr=1 hppir=3FF`, `VTIMER intid=0x14` (20),
+`AT4K par=0x3B00 fail=0` (page tables work on silicon).
+
+**Two shim/bootloader problems found and fixed:**
+1. **The ramdisk never reaches the kernel.** ugglite's lk does not add
+   `linux,initrd-*` to `/chosen` (the stock DTB's chosen node has only
+   `bootargs`) *and* does not place the ramdisk at the boot image header's
+   `ramdisk_addr` - 0x81000000 read back as unrelated data, and a 64 KiB test
+   ramdisk was not found there either. **Fix:** the payload is now appended to
+   the uncompressed `Image` before gzip, so lk's own decompression places it
+   contiguously after the shim; `sweet_payload_addr()` finds it relative to
+   `_end` and validates magic + version + nsegs (the string "SWEETXNU" also
+   appears in the shim, so the magic alone is not enough).
+2. **boot_args alignment was hardcoded to 16K.** ugglite is a 4K kernel, so
+   `BOOT_PAGE` is now board-selected.
+
+**Then XNU jumped and printed nothing.** The shim's `JUMP` line is the last
+thing it prints; after that the screen stayed blank. Cause: the early-console
+code (patch 0010) hardcodes sweet's framebuffer (0x9c000000, 4320-byte rows),
+so `start.s` mapped the wrong 32 MiB block and `sweet_early_putc()` wrote into
+RAM. Fixed with `osfmk/arm64/ugg_early_board.h` (0x90000000, 720x1280,
+2160-byte rows, 24 bpp) and a byte-store pixel helper. `mkadt --ugglite` also
+advertised stride 2880 (32 bpp) while the shim draws 2160 (24 bpp); the ADT now
+matches.
+
+**Naming (user request 2026-10-20):** the identifiers introduced for this port
+are `UGG_*` - `UGG_FAMILY` (was SWEET_FAMILY, in the 34 patches that use it),
+`UGG_GIC_V2`, `UGG_EARLY_*`, `ugg_early_board.h`. The inherited patch series
+keeps its own names and filenames. The user's instruction: "our code is ugglite
+not sweet" - do not add new SWEET_* names.
+
 **GICv2 IPI fixed in patch 0083 (2026-10-20).** `SweetCPU::signalCPU()`
 (patch 0018, rewritten by 0065) sent the cross-CPU signal with
 `ICC_SGI1R_EL1`, a GICv3 system register that a GICv2 CPU interface does not
