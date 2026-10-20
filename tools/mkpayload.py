@@ -32,7 +32,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import adt  # noqa: E402
 
 LC_SEGMENT_64, LC_UNIXTHREAD, LC_DYLD_CHAINED_FIXUPS = 0x19, 0x5, 0x80000034
-PAGE = 0x4000
+# The page size and the start.s L2 block size depend on the kernel's hardware
+# granule, not on the VM page size: a 16K-granule kernel (sweet) maps 32MB
+# blocks with 16K pages, while a 4K-granule kernel (ugglite) maps 2MB blocks
+# with 4K pages. adt_page_and_block() derives both from the ADT's board.
+
 BOOT_LINE_LENGTH = 608
 CMDLINE = 0x48
 SEG_TABLE = CMDLINE + BOOT_LINE_LENGTH	# 0x2a8
@@ -132,6 +136,31 @@ def add_ramdisk_to_adt(adt_blob, phys, size):
     return adt.serialize(root)
 
 
+def adt_page_and_block(adt_blob):
+    """Hardware page size and start.s L2 block size for this ADT's board.
+
+    The ADT says which interrupt controller the board has, and that tracks the
+    granule: the 4K-granule MSM8917 target is GICv2 ("arm,gic-v2"), while the
+    16K targets are GICv3. Keeping the choice in one place means the payload
+    layout cannot drift from the kernel's own page size.
+    """
+    root, _ = adt.parse(adt_blob)
+
+    def walk(n):
+        if n.name == 'gic':
+            compat = n.prop('compatible') or b''
+            return compat.rstrip(b'\0')
+        for c in n.children:
+            r = walk(c)
+            if r:
+                return r
+
+    compat = walk(root) or b''
+    if b'gic-v2' in compat:
+        return 0x1000, 0x200000        # 4K pages, 2MB L2 block
+    return 0x4000, 0x2000000           # 16K pages, 32MB L2 block
+
+
 def adt_dram(adt_blob):
     """Kernel-managed RAM <base, size> from the ADT's /chosen dram-base/dram-size."""
     root, _ = adt.parse(adt_blob)
@@ -147,20 +176,24 @@ def build(kernel_path, adt_path, cmdline, ramdisk_path=None):
     segs = [s for s in m['segs'] if s['vmsize']]
     text = m['segs'][0]
     assert text['name'] == '__TEXT' and text['fileoff'] == 0
-    # virt_base: 32MB (16K-granule L2 block) below the mach header, so start.s's
-    # block mapping that starts at the header's block begins exactly at phys_base.
-    virt_base = text['vmaddr'] & ~(0x2000000 - 1)
-    kernel_end = max(s['vmaddr'] + s['vmsize'] for s in segs)
-    kernel_end = (kernel_end + PAGE - 1) & ~(PAGE - 1)
-
     adt_blob = open(adt_path, 'rb').read()
+    # The hardware granule decides the page size and the start.s block size:
+    # a GICv2/4K board (ugglite) uses 4K pages and 2MB L2 blocks, the 16K
+    # boards use 16K pages and 32MB blocks.
+    page, block = adt_page_and_block(adt_blob)
+    # virt_base: one block below the mach header, so start.s's block mapping
+    # that starts at the header's block begins exactly at phys_base.
+    virt_base = text['vmaddr'] & ~(block - 1)
+    kernel_end = max(s['vmaddr'] + s['vmsize'] for s in segs)
+    kernel_end = (kernel_end + page - 1) & ~(page - 1)
+
     # The ADT decides where the kernel's RAM is (mkadt.py --highmem).
     PHYS_BASE, MEM_SIZE = adt_dram(adt_blob)
     pieces = [(s['vmaddr'], s['vmsize'], buf[s['fileoff']:s['fileoff'] + s['filesize']]) for s in segs]
     ramdisk = None
     if ramdisk_path:
         image = open(ramdisk_path, 'rb').read()
-        rd_size = (len(image) + PAGE - 1) & ~(PAGE - 1)
+        rd_size = (len(image) + page - 1) & ~(page - 1)
         rd_va = kernel_end
         kernel_end = rd_va + rd_size
         rd_pa = rd_va - virt_base + PHYS_BASE
