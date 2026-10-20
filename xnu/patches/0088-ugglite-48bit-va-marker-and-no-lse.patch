@@ -224,3 +224,48 @@
  
  
  #
+--- a/osfmk/arm/commpage/commpage_asm.s
++++ b/osfmk/arm/commpage/commpage_asm.s
+@@ -272,9 +272,22 @@
+ 	mov		w10, wzr		 // unlock value = w10 = 0
+ 	mov		w11, #1			 // locked value = w11 = 1
+ 
+-	// Try to grab the lock
++	// Try to grab the lock.
++	// Cortex-A53 is ARMv8.0 and has no LSE atomics, so casa (an ARMv8.1
++	// instruction) is UNDEFINED there. Use the LL/SC pair instead; the
++	// acquire semantics come from ldaxr and the release from stlr below,
++	// which is what casa/stlr gave on the LSE path.
++#if defined(BOARD_UGGLITE)
++	ldaxr	w10, [x3]
++	cbnz	w10, 1f
++	stxr	w12, w11, [x3]
++	cbnz	w12, 1f
++	b	Ltrylock_enqueue_success
++1:
++#else
+ 	casa	w10, w11, [x3]	 // Atomic CAS with acquire barrier
+ 	cbz		w10, Ltrylock_enqueue_success
++#endif
+ 
+ 	mov		x0, #-1			// Failed
+ 	b Ltrylock_enqueue_exit
+@@ -323,8 +336,18 @@
+ 	mov		w10, wzr		 // unlock value = w10 = 0
+ 	mov		w11, #1			 // locked value = w11 = 1
+ 
++	// Same LL/SC substitution as pfz_trylock_and_enqueue: no LSE on A53.
++#if defined(BOARD_UGGLITE)
++	ldaxr	w10, [x2]
++	cbnz	w10, 1f
++	stxr	w12, w11, [x2]
++	cbnz	w12, 1f
++	b	Ltrylock_dequeue_success
++1:
++#else
+ 	casa	w10, w11, [x2]	 // Atomic CAS with acquire barrier
+ 	cbz		w10, Ltrylock_dequeue_success
++#endif
+ 
+ 	mov		x0, #-1			// Failed
+ 	b Ltrylock_dequeue_exit
