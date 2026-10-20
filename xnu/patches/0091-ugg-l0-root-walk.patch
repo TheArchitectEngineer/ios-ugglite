@@ -71,7 +71,22 @@
  }
  
  #if XNU_MONITOR
-@@ -1787,26 +1800,26 @@
+@@ -1005,6 +1018,14 @@
+ 		assert(_end >= va);
+ 		tmplate = *tte2;
+ 
++		/* An empty L2 entry here means the caller walked a VA whose L2 table
++		 * was never allocated; phystokv(0) would panic with a bare "illegal
++		 * PA: 0x0", so name the address instead. */
++		if (tmplate == ARM_TTE_EMPTY) {
++			panic("arm_vm: no L2 entry for va %#lx (start %#lx end %#lx)",
++			    (unsigned long)va, (unsigned long)start, (unsigned long)_end);
++		}
++
+ 		if (ARM_TTE_TYPE_TABLE == (tmplate & ARM_TTE_TYPE_MASK)) {
+ 			/* pick up the existing page table. */
+ 			ppte = (pt_entry_t *)phystokv((tmplate & ARM_TTE_TABLE_MASK));
+@@ -1787,26 +1808,53 @@
  static void
  init_ptpages(tt_entry_t *tt, vm_map_address_t start, vm_map_address_t end, bool static_map, uint64_t table_attrs)
  {
@@ -95,6 +110,33 @@
  
 -		if ((start + ARM_TT_L1_SIZE) < start) {
 -			/* If this is the last L1 entry, it must cover the last mapping. */
++#if ARM_TT_ROOT_LEVEL == 0
++		/*
++		 * With an L0 root this function is one level short of what the
++		 * callers expect: they walk root -> L1 -> L2 and assume the L2
++		 * entry exists. Under the generic L1 root the table allocated
++		 * above *is* that L2. Here it is an L1, so allocate the L2 pages
++		 * for every L1 entry this root entry can cover.
++		 */
++		{
++			tt_entry_t *l1 = (tt_entry_t *)phystokv(*root_tte & ARM_TTE_TABLE_MASK);
++			vm_map_address_t l1_start = start;
++
++			while (l1_start < end &&
++			    ((l1_start & ARM_TT_ROOT_INDEX_MASK) >> ARM_TT_ROOT_SHIFT) ==
++			    ((start & ARM_TT_ROOT_INDEX_MASK) >> ARM_TT_ROOT_SHIFT)) {
++				tt_entry_t *l1_tte = &l1[(l1_start & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT];
++				if (*l1_tte == ARM_TTE_EMPTY) {
++					vm_offset_t l2_vaddr = alloc_ptpage(static_map);
++					*l1_tte = (kvtophys(l2_vaddr) & ARM_TTE_TABLE_MASK) |
++					    ARM_TTE_TYPE_TABLE | ARM_TTE_VALID | table_attrs;
++					bzero((void *)l2_vaddr, ARM_PGBYTES);
++				}
++				l1_start += ARM_TT_L1_SIZE;
++			}
++		}
++#endif
++
 +		if ((start + ARM_TT_ROOT_SIZE) < start) {
 +			/* If this is the last root entry, it must cover the last mapping. */
  			break;
@@ -107,7 +149,7 @@
  	}
  }
  
-@@ -1850,11 +1863,21 @@
+@@ -1850,11 +1898,21 @@
  {
  	const vm_map_address_t va = UGG_EARLY_FB_VA;
  	assert(va + UGG_EARLY_FB_BLOCKS * ARM_TT_L2_SIZE <= gVirtBase);
@@ -132,7 +174,7 @@
  	/* One block per 2 MiB of panel, PA advancing with the VA. */
  	for (uint64_t i = 0; i < UGG_EARLY_FB_BLOCKS; i++) {
  		assert(slot[i] == ARM_TTE_EMPTY);
-@@ -1868,6 +1891,24 @@
+@@ -1868,6 +1926,24 @@
  }
  #endif
  
@@ -157,7 +199,7 @@
  void
  arm_vm_init(uint64_t memory_size, boot_args * args)
  {
-@@ -2166,8 +2207,7 @@
+@@ -2166,8 +2242,7 @@
  	 *     LOW_GLOBAL_BASE_ADDRESS + 2MB
  	 */
  	va_l1 = va_l2 = LOW_GLOBAL_BASE_ADDRESS;
@@ -167,7 +209,7 @@
  	ptpage_vaddr = alloc_ptpage(TRUE);
  	*cpu_l2_tte = (kvtophys(ptpage_vaddr) & ARM_TTE_TABLE_MASK) | ARM_TTE_TYPE_TABLE | ARM_TTE_VALID | ARM_TTE_TABLE_PXN | ARM_TTE_TABLE_XN;
  	bzero((void *)ptpage_vaddr, ARM_PGBYTES);
-@@ -2343,19 +2383,19 @@
+@@ -2343,19 +2418,19 @@
  	va_l1_end += round_page(args->Video.v_height * args->Video.v_rowBytes);
  	va_l1_end = (va_l1_end + 0x00000000007FFFFFULL) & 0xFFFFFFFFFF800000ULL;
  
@@ -192,7 +234,7 @@
  
  		while (va_l2 < va_l2_end) {
  			pt_entry_t *    ptp;
-@@ -2406,19 +2446,19 @@
+@@ -2406,19 +2481,19 @@
  	va_l1 = (VM_MAX_KERNEL_ADDRESS & CPUWINDOWS_BASE_MASK) - PE_EARLY_BOOT_VA;
  	va_l1_end = VM_MAX_KERNEL_ADDRESS;
  
