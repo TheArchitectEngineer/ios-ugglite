@@ -314,6 +314,21 @@ because clang still accepted the arm64e target alongside
 `-march=armv8.2-a+crypto`. Both boards are PAC-less and should be plain arm64,
 so this is a real fix for sweet too, not just ugglite.
 
+**Build 4: compile clean, link failed - missing config/MASTER.arm64.ugglite
+(2026-10-20).** After the arm64e fix all 899 compiles ran as `-arch arm64`
+with no errors, but the link reported hundreds of undefined symbols
+(`start_cpu`, `thread_bootstrap_return`, `vm_first_phys`,
+`sweet_secondary_entry`, `CleanPoC_Dcache`, ...). Those live in arm64 assembly
+(`start.s`, `locore.s`) and pmap code built only when the config has
+`nos_arm_asm` / `nos_arm_pmap`.
+
+`SETUP/config/doconf` selects `MASTER.<machine-type>` by name, and only
+`MASTER.arm64.sweet` existed - so the UGGLITE build got **no kernel option set
+at all**, compiled no assembly, and had nothing to resolve those symbols. Added
+`config/MASTER.arm64.ugglite`, byte-identical to sweet's below the header (the
+boards differ in `UGGLITE.h`, not in the kernel option set). Rebuild is run
+39360349355.
+
 **GICv2 IPI fixed in patch 0083 (2026-10-20).** `SweetCPU::signalCPU()`
 (patch 0018, rewritten by 0065) sent the cross-CPU signal with
 `ICC_SGI1R_EL1`, a GICv3 system register that a GICv2 CPU interface does not
