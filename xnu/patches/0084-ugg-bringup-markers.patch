@@ -1,13 +1,15 @@
 --- a/osfmk/arm64/start.s
 +++ b/osfmk/arm64/start.s
-@@ -570,6 +570,23 @@
+@@ -570,6 +570,25 @@
  	ldr		x24, [x20, BA_MEM_SIZE]				// Get the physical memory size
  	adrp	x25, EXT(bootstrap_pagetables)@page	// Get the start of the page tables
  	ldr		x26, [x20, BA_BOOT_FLAGS]			// Get the kernel boot flags
 +#if defined(BOARD_UGGLITE)
-+	/* marker 0: 0x0000ffff */
-+	MOV64	x10, (0x90000000 + 0 * 2160)
-+	MOV64	x11, 0x0000ffff
++	/* marker 0 */
++	movz	x10, #0x9000, lsl #16
++	movk	x10, #0x0
++	movz	w11, #0x0, lsl #16
++	movk	w11, #0xffff
 +	mov		x12, #16
 +2:	mov		x13, #720
 +1:	strb	w11, [x10], #1
@@ -24,14 +26,16 @@
  
  	// Clear the registers that will be used to store the userspace thread pointer and CPU number.
  	// We may not actually be booting from ordinal CPU 0, so this register will be updated
-@@ -699,8 +716,42 @@
+@@ -699,8 +718,46 @@
  	lsr		x5,  x24, #(ARM_TT_L2_SHIFT)
  	/* create_bootstrap_mapping(vbase, pbase, num_ents, L1 table, freeptr) */
  	create_bootstrap_mapping x0,  x4,  x5, x1, x2, x6, x10, x11, x12, x13
 +#if defined(BOARD_UGGLITE)
-+	/* marker 1: 0x00ffff00 */
-+	MOV64	x10, (0x90000000 + 16 * 2160)
-+	MOV64	x11, 0x00ffff00
++	/* marker 1 */
++	movz	x10, #0x9000, lsl #16
++	movk	x10, #0x8700
++	movz	w11, #0xff, lsl #16
++	movk	w11, #0xff00
 +	mov		x12, #16
 +2:	mov		x13, #720
 +1:	strb	w11, [x10], #1
@@ -48,9 +52,11 @@
  
  	/* Setup the KVA bootstrap mapping */
 +#if defined(BOARD_UGGLITE)
-+	/* marker 2: 0x00ff00ff */
-+	MOV64	x10, (0x90000000 + 32 * 2160)
-+	MOV64	x11, 0x00ff00ff
++	/* marker 2 */
++	movz	x10, #0x9001, lsl #16
++	movk	x10, #0xe00
++	movz	w11, #0xff, lsl #16
++	movk	w11, #0xff
 +	mov		x12, #16
 +2:	mov		x13, #720
 +1:	strb	w11, [x10], #1
@@ -67,14 +73,16 @@
  	lsr		x5,  x24, #(ARM_TT_L2_SHIFT)
  	create_bootstrap_mapping x14, x15, x5, x3, x2, x9, x10, x11, x12, x13
  
-@@ -726,6 +777,23 @@
+@@ -726,6 +783,25 @@
  #endif
  
  	/* Ensure TTEs are visible */
 +#if defined(BOARD_UGGLITE)
-+	/* marker 3: 0x00ffffff */
-+	MOV64	x10, (0x90000000 + 48 * 2160)
-+	MOV64	x11, 0x00ffffff
++	/* marker 3 */
++	movz	x10, #0x9001, lsl #16
++	movk	x10, #0x9500
++	movz	w11, #0xff, lsl #16
++	movk	w11, #0xffff
 +	mov		x12, #16
 +2:	mov		x13, #720
 +1:	strb	w11, [x10], #1
