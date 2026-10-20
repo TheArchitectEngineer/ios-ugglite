@@ -1,0 +1,129 @@
+--- a/osfmk/arm64/arm_vm_init.c
++++ b/osfmk/arm64/arm_vm_init.c
+@@ -1885,6 +1885,7 @@
+ 	 * in units of the hardware page size and should not need similar treatment.
+ 	 */
+ 	gPhysSize = mem_size = ((gPhysBase + args->memSize) & ~PAGE_MASK) - gPhysBase;
++	sweet_early_mark(21, "arm_vm_init: sizes from boot_args");
+ 
+ 	mem_actual = args->memSizeActual ? args->memSizeActual : mem_size;
+ 
+@@ -1910,6 +1911,7 @@
+ 	assert(physmap_slide < ARM64_PHYSMAP_SLIDE_RANGE);
+ 
+ 	physmap_base += physmap_slide;
++	sweet_early_mark(22, "physmap geometry + early_random");
+ 
+ #if XNU_MONITOR
+ 	physmap_base = ROUND_TWIG(physmap_base);
+@@ -1953,6 +1955,7 @@
+ 
+ 	boot_tte = (tt_entry_t *)&bootstrap_pagetables;
+ 	boot_ttep = kvtophys((vm_offset_t)boot_tte);
++	sweet_early_mark(23, "bootstrap tables located");
+ 
+ #if DEVELOPMENT || DEBUG
+ 	/* Sanity check - assert that BOOTSTRAP_TABLE_SIZE is sufficiently-large to
+@@ -1978,6 +1981,7 @@
+ 	 * to trampoline to KVA. this requires only 3 pages to stay resident.
+ 	 */
+ 	avail_start = args->topOfKernelData;
++	sweet_early_mark(24, "avail_start = topOfKernelData");
+ 
+ #if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
+ 	arm_replace_identity_map();
+@@ -1987,6 +1991,7 @@
+ 	invalid_tte = (tt_entry_t *)alloc_ptpage(TRUE);
+ 	invalid_ttep = kvtophys((vm_offset_t)invalid_tte);
+ 	bzero(invalid_tte, ARM_PGBYTES);
++	sweet_early_mark(25, "invalid_tte allocated");
+ 
+ 	/*
+ 	 * Initialize l1 page table page
+@@ -1994,6 +1999,7 @@
+ 	cpu_tte = (tt_entry_t *)alloc_ptpage(TRUE);
+ 	cpu_ttep = kvtophys((vm_offset_t)cpu_tte);
+ 	bzero(cpu_tte, ARM_PGBYTES);
++	sweet_early_mark(26, "cpu_tte allocated");
+ 	avail_end = gPhysBase + mem_size;
+ 	assert(!(avail_end & PAGE_MASK));
+ 
+@@ -2011,6 +2017,7 @@
+ 	 *   the so called physical aperture should be statically mapped
+ 	 */
+ 	init_ptpages(cpu_tte, gVirtBase, dynamic_memory_begin, TRUE, ARM_TTE_TABLE_AP(ARM_TTE_TABLE_AP_USER_NA));
++	sweet_early_mark(27, "init_ptpages gVirtBase done");
+ 
+ #if defined(ARM_LARGE_MEMORY)
+ 	/*
+@@ -2019,6 +2026,7 @@
+ 	 *   the rest of the kernel virtual address space
+ 	 */
+ 	init_ptpages(cpu_tte, physmap_base, ROUND_L1(physmap_end), TRUE, ARM_DYNAMIC_TABLE_XN | ARM_TTE_TABLE_AP(ARM_TTE_TABLE_AP_USER_NA));
++	sweet_early_mark(28, "init_ptpages physmap done");
+ #endif
+ 
+ 
+@@ -2179,12 +2187,14 @@
+ #endif /* MONOTONIC */
+ 
+ 	arm_set_user_tbi();
++	sweet_early_mark(29, "before sweet_early_map_final");
+ 
+ #if defined(SWEET)
+ 	/* phystokv() must still refer to the bootstrap aperture here. */
+ 	sweet_early_map_final();
+ #endif
+ 	arm_vm_physmap_init(args);
++	sweet_early_mark(30, "arm_vm_physmap_init done");
+ 	set_mmu_ttb_alternate(cpu_ttep & TTBR_BADDR_MASK);
+ 
+ 	ml_enable_monitor();
+--- a/osfmk/arm64/sweet_early.c
++++ b/osfmk/arm64/sweet_early.c
+@@ -29,6 +29,14 @@
+ #define EARLY_COLS (EARLY_WIDTH / EARLY_CELL_W)
+ 
+ /*
++ * Bring-up marker geometry. The panel is 720 px wide and the marker band lives
++ * in the bottom 32 rows, so with one 17 px band per stage 40 stages fit.
++ * (It used to be 64 px, which only allowed the 21 stages 0..20.)
++ */
++#define SWEET_EARLY_MAX_STAGE 40u
++#define SWEET_EARLY_BAND      17u
++
++/*
+  * Write one pixel. sweet's panel takes 32-bit words; ugglite's splash buffer
+  * is 24 bpp RGB888, where a 32-bit store would overwrite the neighbouring
+  * pixel and produce the diagonal noise seen on the phone.
+@@ -120,7 +128,7 @@
+ void
+ sweet_early_mark(unsigned int stage, const char *label)
+ {
+-	if (early_disabled || stage > 20) {
++	if (early_disabled || stage > SWEET_EARLY_MAX_STAGE) {
+ 		return;
+ 	}
+ 	uint32_t color = 0xff00ff00u | ((stage & 7u) * 32u << 16);
+@@ -133,14 +141,19 @@
+ 		}
+ 	} else {
+ 		for (unsigned int y = EARLY_HEIGHT - 32; y < EARLY_HEIGHT; y++) {
+-			for (unsigned int x = stage * 64; x < (stage + 1) * 64; x++) {
++			for (unsigned int x = stage * SWEET_EARLY_BAND;
++			    x < (stage + 1) * SWEET_EARLY_BAND; x++) {
+ 				sweet_early_pixel(EARLY_FB + y * EARLY_STRIDE, x, color);
+ 			}
+ 		}
+ 	}
+ 	__asm__ volatile("dsb sy" ::: "memory");
+ 	sweet_early_string("SWEET EARLY ");
+-	sweet_early_putc((char)('0' + stage));
++	/* Two digits: '0' + stage is only correct to stage 9; 10 printed ':' . */
++	if (stage >= 10) {
++		sweet_early_putc((char)('0' + stage / 10));
++	}
++	sweet_early_putc((char)('0' + stage % 10));
+ 	sweet_early_string(": ");
+ 	sweet_early_string(label);
+ 	sweet_early_putc('\n');
