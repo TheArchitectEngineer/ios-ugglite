@@ -5,11 +5,11 @@
  	adrp	x25, EXT(bootstrap_pagetables)@page	// Get the start of the page tables
  	ldr		x26, [x20, BA_BOOT_FLAGS]			// Get the kernel boot flags
 +#if defined(BOARD_UGGLITE)
-+	/* marker 0: 0xff0000 */
++	/* marker 0: 0xff00ff */
 +	movz	x10, #0x9000, lsl #16
 +	movk	x10, #0x0
 +	movz	w11, #0xff, lsl #16
-+	movk	w11, #0x0
++	movk	w11, #0xff
 +	mov		x12, #16
 +2:	mov		x13, #720
 +1:	strb	w11, [x10], #1
@@ -26,15 +26,15 @@
  
  	// Clear the registers that will be used to store the userspace thread pointer and CPU number.
  	// We may not actually be booting from ordinal CPU 0, so this register will be updated
-@@ -699,8 +718,46 @@
+@@ -699,10 +718,48 @@
  	lsr		x5,  x24, #(ARM_TT_L2_SHIFT)
  	/* create_bootstrap_mapping(vbase, pbase, num_ents, L1 table, freeptr) */
  	create_bootstrap_mapping x0,  x4,  x5, x1, x2, x6, x10, x11, x12, x13
 +#if defined(BOARD_UGGLITE)
-+	/* marker 1: 0x00ff00 */
++	/* marker 1: 0xffff00 */
 +	movz	x10, #0x9000, lsl #16
 +	movk	x10, #0x8700
-+	movz	w11, #0x0, lsl #16
++	movz	w11, #0xff, lsl #16
 +	movk	w11, #0xff00
 +	mov		x12, #16
 +2:	mov		x13, #720
@@ -51,10 +51,90 @@
 +#endif
  
  	/* Setup the KVA bootstrap mapping */
+ 	lsr		x5,  x24, #(ARM_TT_L2_SHIFT)
+ 	create_bootstrap_mapping x14, x15, x5, x3, x2, x9, x10, x11, x12, x13
 +#if defined(BOARD_UGGLITE)
-+	/* marker 2: 0x0000ff */
++	/* marker 2: 0x00ffff */
 +	movz	x10, #0x9001, lsl #16
 +	movk	x10, #0xe00
++	movz	w11, #0x0, lsl #16
++	movk	w11, #0xffff
++	mov		x12, #16
++2:	mov		x13, #720
++1:	strb	w11, [x10], #1
++	lsr		w14, w11, #8
++	strb	w14, [x10], #1
++	lsr		w14, w11, #16
++	strb	w14, [x10], #1
++	subs	x13, x13, #1
++	b.ne	1b
++	subs	x12, x12, #1
++	b.ne	2b
++	dsb		sy
++#endif
+ 
+ #if defined(SWEET)
+ 	/*
+@@ -727,6 +784,25 @@
+ 
+ 	/* Ensure TTEs are visible */
+ 	dsb		ish
++#if defined(BOARD_UGGLITE)
++	/* marker 3: 0xff0000 */
++	movz	x10, #0x9001, lsl #16
++	movk	x10, #0x9500
++	movz	w11, #0xff, lsl #16
++	movk	w11, #0x0
++	mov		x12, #16
++2:	mov		x13, #720
++1:	strb	w11, [x10], #1
++	lsr		w14, w11, #8
++	strb	w14, [x10], #1
++	lsr		w14, w11, #16
++	strb	w14, [x10], #1
++	subs	x13, x13, #1
++	b.ne	1b
++	subs	x12, x12, #1
++	b.ne	2b
++	dsb		sy
++#endif
+ 
+ 
+ 	b		common_start
+@@ -760,6 +836,25 @@
+ 	add		x0, x0, EXT(sysreg_restore)@pageoff
+ 	ldr		x1, [x0, SR_RESTORE_TCR_EL1]
+ 	MSR_TCR_EL1_X1
++#if defined(BOARD_UGGLITE)
++	/* marker 4: 0x00ff00 */
++	movz	x10, #0x9002, lsl #16
++	movk	x10, #0x1c00
++	movz	w11, #0x0, lsl #16
++	movk	w11, #0xff00
++	mov		x12, #16
++2:	mov		x13, #720
++1:	strb	w11, [x10], #1
++	lsr		w14, w11, #8
++	strb	w14, [x10], #1
++	lsr		w14, w11, #16
++	strb	w14, [x10], #1
++	subs	x13, x13, #1
++	b.ne	1b
++	subs	x12, x12, #1
++	b.ne	2b
++	dsb		sy
++#endif
+ 
+ 	/* Set up translation table base registers.
+ 	 *	TTBR0 - V=P table @ top of kernel
+@@ -777,6 +872,25 @@
+ 	add		x0, x25, PGBYTES
+ 	and		x0, x0, #(TTBR_BADDR_MASK)
+ 	MSR_TTBR1_EL1_X0
++#if defined(BOARD_UGGLITE)
++	/* marker 5: 0x0000ff */
++	movz	x10, #0x9002, lsl #16
++	movk	x10, #0xa300
 +	movz	w11, #0x0, lsl #16
 +	movk	w11, #0xff
 +	mov		x12, #16
@@ -70,17 +150,17 @@
 +	b.ne	2b
 +	dsb		sy
 +#endif
- 	lsr		x5,  x24, #(ARM_TT_L2_SHIFT)
- 	create_bootstrap_mapping x14, x15, x5, x3, x2, x9, x10, x11, x12, x13
  
-@@ -726,6 +783,25 @@
- #endif
- 
- 	/* Ensure TTEs are visible */
+ 	// Set up MAIR attr0 for normal memory, attr1 for device memory
+ 	mov		x0, xzr
+@@ -797,6 +911,25 @@
+ 	mov		x1, #(MAIR_POSTED_COMBINED_REORDERED << MAIR_ATTR_SHIFT(CACHE_ATTRINDX_POSTED_COMBINED_REORDERED))
+ 	orr		x0, x0, x1
+ 	msr		MAIR_EL1, x0
 +#if defined(BOARD_UGGLITE)
-+	/* marker 3: 0x000000 */
-+	movz	x10, #0x9001, lsl #16
-+	movk	x10, #0x9500
++	/* marker 6: 0x000000 */
++	movz	x10, #0x9003, lsl #16
++	movk	x10, #0x2a00
 +	movz	w11, #0x0, lsl #16
 +	movk	w11, #0x0
 +	mov		x12, #16
@@ -96,6 +176,6 @@
 +	b.ne	2b
 +	dsb		sy
 +#endif
+ 	isb
+ 	tlbi	vmalle1
  	dsb		ish
- 
- 
