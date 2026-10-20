@@ -2,7 +2,11 @@
 """Build the minimal Apple Device Tree that the SWEET xnu needs to boot.
 
 Only what the early boot path actually reads (see NOTES.md); every MMIO
-address comes from the sweet live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem]
+address comes from the board's live FDT.
+
+Usage: mkadt.py OUT.adt [--dump] [--qemu] [--highmem] [--ugglite]
+       --ugglite   Redmi Note 5A (MSM8917): 2 GiB in two banks, GICv2,
+                   no UFS (eMMC/SDHCI), 720x1280 panel.
 """
 import hashlib, os, struct, sys
 
@@ -32,6 +36,20 @@ VTIMER_INTID = 19
 # QEMU virt (-M virt,gic-version=3 -cpu cortex-a76): GICD/GICR and the generic timer's CNTFRQ
 QEMU_GICD, QEMU_GICR, QEMU_TIMEBASE = 0x08000000, 0x080a0000, 62500000
 QEMU_VTIMER_INTID = 27
+
+# --- ugglite (Redmi Note 5A, MSM8917 + PM8937), read from the live FDT ---
+# Two 1 GiB banks, no upper bank. The kernel cannot live in the carve-outs, so
+# use bank 1 starting above the highest fixed region (0x8ce00000 wcnss_fw) and
+# stop below ramoops at 0xb0000000. Dynamic pools are limited below 4G.
+UGG_PHYS_BASE = 0x8d000000
+UGG_MEM_SIZE = 0x23000000          # 0x8d000000 .. 0xb0000000 = 560 MiB
+UGG_GICD, UGG_GICD_SIZE = 0x0b000000, 0x1000
+UGG_GICC, UGG_GICC_SIZE = 0x0b002000, 0x1000
+UGG_VTIMER_INTID = 20              # PPI 4: secure-phys/phys/virt/hyp = 2/3/4/1
+UGG_FB, UGG_FB_SIZE = 0x90000000, 0x1400000
+UGG_FB_W, UGG_FB_H, UGG_FB_STRIDE = 720, 1280, 720 * 4
+UGG_CANVAS_W, UGG_CANVAS_H = 750, 1334  # iPhone 8 (D20AP) points*2 fit 720x1280
+UGG_DISPLAY_SCALE = 2
 
 BOOT_MANIFEST_HASH = hashlib.sha384(b'sweet boot manifest').digest()
 
@@ -68,10 +86,19 @@ def node(name, props=(), children=()):
     return n
 
 
-def build(seed=None, qemu=False, highmem=False):
-    """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py)."""
-    phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
-    gicd, gicr, timebase = (QEMU_GICD, QEMU_GICR, QEMU_TIMEBASE) if qemu else (GICD, GICR, TIMEBASE)
+def build(seed=None, qemu=False, highmem=False, ugglite=False):
+    """qemu=True: QEMU virt addresses; ugglite=True: Redmi Note 5A (MSM8917)."""
+    if ugglite:
+        phys_base, mem_size = UGG_PHYS_BASE, UGG_MEM_SIZE
+        timebase = TIMEBASE
+        gicd, gicr = UGG_GICD, UGG_GICC
+        gicd_size, gicr_size = UGG_GICD_SIZE, UGG_GICC_SIZE
+        vtimer_intid = UGG_VTIMER_INTID
+    else:
+        phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
+        gicd, gicr, timebase = (QEMU_GICD, QEMU_GICR, QEMU_TIMEBASE) if qemu else (GICD, GICR, TIMEBASE)
+        gicd_size, gicr_size = GICD_SIZE, GICR_SIZE
+        vtimer_intid = QEMU_VTIMER_INTID if qemu else VTIMER_INTID
     seed = seed if seed is not None else os.urandom(64)
     phandle = iter(range(1, 1000))
     ph = lambda: ('AAPL,phandle', u32(next(phandle)))
@@ -95,7 +122,7 @@ def build(seed=None, qemu=False, highmem=False):
         # from /chosen, the pixel size from IOMobileFramebuffer. Scale 0 makes
         # SpringBoard's FBSDisplayMode "infxinf@0x" invalid. 1080x2400 @3x =
         # 360x800 points (like iPhone X class devices).
-        ('display-scale', u32(3)),
+        ('display-scale', u32(UGG_DISPLAY_SCALE if ugglite else 3)),
         # XNU derives IOPlatformUUID (gethostuuid) from these on arm; without
         # them CFPreferences cannot use kCFPreferencesCurrentHost (no ByHost
         # files), so e.g. DataMigration never records LastSystemVersion and
@@ -124,12 +151,16 @@ def build(seed=None, qemu=False, highmem=False):
     # and uses cpus=N to select an initial prefix (N <= 8).
     # QEMU retains its original single-CPU tree: its MPIDRs differ from sweet.
     cpu_nodes = []
-    for core in range(1 if qemu else 8):
+    n_cpus = 1 if qemu else (4 if ugglite else 8)
+    for core in range(n_cpus):
         cpu_nodes.append(node(f'cpu{core}', [
             ph(),
             ('device_type', cstr('cpu')),
-            ('compatible', cstr('qcom,kryo470') + cstr('ARM,v8')),
-            ('reg', u32(core << 8)),  # actual MPIDR Aff1:Aff0, NOT logical ID
+            ('compatible', cstr('qcom,kryo260') + cstr('ARM,v8') if ugglite
+             else cstr('qcom,kryo470') + cstr('ARM,v8')),
+            # actual MPIDR Aff1:Aff0, NOT logical ID. ugglite's DT uses
+            # 0x100..0x103 (Aff1=1), matching the live /cpus nodes.
+            ('reg', u32(0x100 + core if ugglite else (core << 8))),
             ('cpu-id', u32(core)),   # descriptive: XNU assigns IDs by DT order
             ('cluster-id', u32(0)),  # descriptive; see ml_parse_cpu_topology
             ('cluster-type', u32(0)),  # homogeneous CLUSTER_TYPE_SMP, not AMP
@@ -150,10 +181,12 @@ def build(seed=None, qemu=False, highmem=False):
 
     gic = node('gic', [
         ph(),
-        ('compatible', cstr('arm,gic-v3')),
+        # ugglite is GICv2 (two frames: distributor + CPU interface); the
+        # other targets are GICv3 with redistributors.
+        ('compatible', cstr('arm,gic-v2') if ugglite else cstr('arm,gic-v3')),
         ('interrupt-controller', b''),
-        ('virtual-timer-intid', u32(QEMU_VTIMER_INTID if qemu else VTIMER_INTID)),
-        ('reg', u64(gicd - SOC_BASE, GICD_SIZE, gicr - SOC_BASE, GICR_SIZE)),
+        ('virtual-timer-intid', u32(vtimer_intid)),
+        ('reg', u64(gicd - SOC_BASE, gicd_size, gicr - SOC_BASE, gicr_size)),
     ])
     arm_io = node('arm-io', [
         ph(),
@@ -175,16 +208,16 @@ def build(seed=None, qemu=False, highmem=False):
             ph(),
             ('device_type', cstr('display-subsystem')),
             ('compatible', cstr('sweet,display')),
-            ('canvas-width', u32(1125)),
-            ('canvas-height', u32(2436)),
+            ('canvas-width', u32(UGG_CANVAS_W if ugglite else 1125)),
+            ('canvas-height', u32(UGG_CANVAS_H if ugglite else 2436)),
         ])])
 
     fbcon = node('sweet-fbcon', [
         ph(),
-        ('reg', u64(FB, FB_SIZE)),
-        ('width', u32(FB_W)),
-        ('height', u32(FB_H)),
-        ('stride', u32(FB_STRIDE)),
+        ('reg', u64(UGG_FB, UGG_FB_SIZE) if ugglite else u64(FB, FB_SIZE)),
+        ('width', u32(UGG_FB_W if ugglite else FB_W)),
+        ('height', u32(UGG_FB_H if ugglite else FB_H)),
+        ('stride', u32(UGG_FB_STRIDE if ugglite else FB_STRIDE)),
     ])
 
     # bsd/dev/sweet_ufs.c: the UFS host ABL leaves running (absolute physical reg).
@@ -224,11 +257,12 @@ def build(seed=None, qemu=False, highmem=False):
         ('manufacturer', cstr('Apple Inc.')),
         ('#address-cells', u32(2)),
         ('#size-cells', u32(2)),
-    ], [chosen, defaults, cpus, arm_io, fbcon, buttons] + product + ([] if qemu else [ufs]))
+    ], [chosen, defaults, cpus, arm_io, fbcon, buttons] + product + ([] if (qemu or ugglite) else [ufs]))
 
 
 if __name__ == '__main__':
-    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv)
+    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv,
+                 ugglite='--ugglite' in sys.argv)
     blob = adt.serialize(root)
     open(sys.argv[1], 'wb').write(blob)
     if '--dump' in sys.argv:

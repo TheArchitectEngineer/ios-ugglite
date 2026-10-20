@@ -10,16 +10,15 @@ on:
         description: RELEASE / DEVELOPMENT / DEBUG
         default: DEVELOPMENT
       machine_config:
-        description: xnu MACHINE_CONFIG
-        default: SWEET
+        description: xnu MACHINE_CONFIG (UGGLITE = Redmi Note 5A, SWEET = Redmi Note 10 Pro)
+        default: UGGLITE
       keep_going:
         description: make -k (collect all compile errors in one run)
         default: "true"
-  push:
-    branches: [main]
-    paths:
-      - "xnu/patches/**"
-      - ".github/workflows/xnu.yml"
+  # No push trigger on purpose: this repo builds UGGLITE, and a push-triggered
+  # run would compete with a manual dispatch for the concurrency group and
+  # produce whichever config happened to be default. Dispatch explicitly:
+  #   gh workflow run xnu.yml -f machine_config=UGGLITE
 
 concurrency:
   group: xnu-${{ github.ref }}
@@ -30,7 +29,7 @@ env:
   DXB_SHA: 663906528d1cd5ea8fde7de6f16de73db9511549
   MACOS_VERSION: ${{ inputs.macos_version || '13.5' }}
   KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEVELOPMENT' }}
-  MACHINE_CONFIG: ${{ inputs.machine_config || 'SWEET' }}
+  MACHINE_CONFIG: ${{ inputs.machine_config || 'UGGLITE' }}
 
 jobs:
   build:

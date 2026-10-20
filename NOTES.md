@@ -284,10 +284,26 @@ remaining risk is whether those `PAGE_RATIO == 4` paths hold under real load.
 1. Boot the result on the phone with `rd=md0` (RAM disk) before touching
    userdata: the goal is just `SWEET GIC: v2 distributor ... cpu-interface ...`
    and timer interrupts firing, not a root filesystem.
-2. Then the remaining SoC work: SDHCI/eMMC root, USB device mode, a 32-bit-PA
-   memory map in mkadt (2 GiB in two banks at 0x80000000/0xc0000000, carve-outs
-   at 0x84a00000/0x86800000/0x8bd00000/0x8ce00000/0x90000000/0xb0000000),
-   720x1280 panel, touch, PM8937 keys.
+2. Then the remaining SoC work: SDHCI/eMMC root, USB device mode, 720x1280
+   panel, touch, PM8937 keys.
+
+**Repo moved 2026-10-20:** the tree is now pushed to **`cuwayo/ios-ugglite`**
+(the original `dipa-studio/ios-sweet` is not writable by this account). The
+workflow there defaults to `MACHINE_CONFIG=UGGLITE` and no longer runs on push,
+because a push-triggered run would take the concurrency slot from a manual
+dispatch and build whichever config was default. Dispatch with
+`gh workflow run xnu.yml -R cuwayo/ios-ugglite -f machine_config=UGGLITE`.
+
+**mkadt `--ugglite` added (2026-10-20).** `tools/mkadt.py --ugglite` emits the
+MSM8917 device tree: `dram-base 0x8d000000` + 560 MiB (bank 1, above the wcnss
+carve-out and below ramoops at 0xb0000000), GICv2 `compatible arm,gic-v2` with
+distributor 0xb000000 and CPU interface 0xb002000, `virtual-timer-intid 20`,
+`display-scale 2`, canvas 750x1334 (iPhone 8 / D20AP proportions, fits the
+720x1280 panel), `sweet-fbcon` at 0x90000000 with 720x1280/stride 2880, four
+`qcom,kryo260` CPUs with MPIDR 0x100..0x103 (matching the live /cpus nodes), and
+no `sweet-ufs` node (ugglite is eMMC/SDHCI). Verified: sweet, qemu and highmem
+ADTs are byte-identical to the previous mkadt with a fixed seed, so only the new
+`--ugglite` path changed.
 1. `fastboot boot shim/out/shim-boot-ugglite.img` on the Note 5A with the phone
    in fastboot. Expected: red "SHIM ugglite loader + board probe" screen, then
    the probe results, then reset in ~3 min.
