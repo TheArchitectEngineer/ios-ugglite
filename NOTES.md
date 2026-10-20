@@ -329,6 +329,26 @@ at all**, compiled no assembly, and had nothing to resolve those symbols. Added
 boards differ in `UGGLITE.h`, not in the kernel option set). Rebuild is run
 39360349355.
 
+**Build 5: two more errors, both now fixed (2026-10-20).**
+1. `KPC_MAX_COUNTERS` undeclared. Patch 0008 adds `kperf kpc` to
+   `PERF_DBG_BASE` in `config/MASTER.arm64.sweet`, but my
+   `MASTER.arm64.ugglite` was copied from the pre-0008 file, so it never got
+   that edit. The ugglite MASTER now lives in patch 0006 (where sweet's is
+   created, before 0008 runs) and 0008 patches **both** files.
+2. **The 4K commpage static assert** in `osfmk/arm/pmap/pmap.c` - the first
+   time the `ARM_PGSHIFT == 12` branch has ever been compiled here:
+   `static_assert((_COMM_PAGE64_BASE_ADDRESS & ~ARM_TT_L1_OFFMASK) >=
+   MACH_VM_MAX_ADDRESS)`. The commpage is at `0x0fffffc000`, masked to
+   `0x0fc0000000`; `XNU_PLATFORM_MacOSX` sets `MACH_VM_MAX_ADDRESS` to
+   `0x7ffffe000000` (128TB), which this kernel's 36-bit VA cannot address at
+   all. Against the iPhoneOS limit `0x0fc0000000` the assert holds exactly.
+   SWEET now compares against that value, so the check keeps its meaning
+   instead of failing on a VA limit that does not apply. **This is the known
+   macOS-config-vs-iOS gap surfacing for the first time because of the 4K
+   granule** - worth remembering when more 4K-specific code is exercised.
+
+Rebuild is run 39361391713.
+
 **GICv2 IPI fixed in patch 0083 (2026-10-20).** `SweetCPU::signalCPU()`
 (patch 0018, rewritten by 0065) sent the cross-CPU signal with
 `ICC_SGI1R_EL1`, a GICv3 system register that a GICv2 CPU interface does not
