@@ -365,6 +365,27 @@ applying 0001-0081 plus 0082 to a real tree, only `board_config.h` itself still
 mentions the board macro (its two include blocks) and 64 sites use
 `SWEET_FAMILY`. Rebuild is run 39363087502.
 
+**Build 7: the staging scripts exited for ugglite (2026-10-20).** Failure was
+immediate: `corecrypto_sha2.c:88: fatal error: 'sweet_bearssl/inc/bearssl_hash.h'
+file not found`. The three staging scripts (0019 pthread, 0020 BearSSL,
+0026 HFS) each began with `[[ "${MACHINE_CONFIG:-}" == SWEET ]] || exit 0`, so
+under UGGLITE they staged nothing and the kernel compiled against headers that
+did not exist. They now accept `SWEET|UGGLITE`, and the two Makefile.template
+gates in 0019/0020 test `$(filter $(CURRENT_MACHINE_CONFIG),SWEET UGGLITE)`.
+
+**Direction trap, hit twice:** the staging gates need **ifneq** ("this board IS
+in the list"), while 0004's arm64e gate needs **ifeq** ("arm64e is for the OTHER
+boards"). I inverted the staging ones on the first attempt and only caught it by
+running a standalone makefile:
+
+    UGGLITE: ARCH=arm64 staged=yes
+    SWEET:   ARCH=arm64 staged=yes
+    T8103:   ARCH=arm64e staged=no
+
+Audited the whole series afterwards: no exact-string `SWEET` comparisons remain
+in scripts, Makefiles or the workflow. `#if defined(SWEET)` sites are fine
+because UGGLITE.h defines `SWEET` as well. Rebuild is run 39363870802.
+
 **GICv2 IPI fixed in patch 0083 (2026-10-20).** `SweetCPU::signalCPU()`
 (patch 0018, rewritten by 0065) sent the cross-CPU signal with
 `ICC_SGI1R_EL1`, a GICv3 system register that a GICv2 CPU interface does not
