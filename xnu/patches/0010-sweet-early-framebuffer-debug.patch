@@ -402,11 +402,11 @@ diff --git a/osfmk/arm64/ugg_early_board.h b/osfmk/arm64/ugg_early_board.h
 new file mode 100644
 --- /dev/null
 +++ b/osfmk/arm64/ugg_early_board.h
-@@ -0,0 +1,35 @@
+@@ -0,0 +1,29 @@
 +/*
 + * Early-console panel geometry, per board.
 + *
-+ * sweet_early.c draws straight into the ABL splash buffer with the MMU off,
++ * sweet_early.c draws into the ABL splash buffer during early kernel startup,
 + * so the address, size and pixel format must be exact for the board.
 + */
 +#ifndef _ARM64_UGG_EARLY_BOARD_H_
@@ -414,16 +414,10 @@ new file mode 100644
 +
 +#if defined(BOARD_UGGLITE)
 +/* Redmi Note 5A: 720x1280 RGB888 at 0x90000000, 2160-byte rows. */
-+/*
-+ * start.s maps the splash framebuffer at VA virt_base + fb_index * 2MB, not
-+ * at its physical address, and the early console runs with the MMU ON (it is
-+ * called from arm_init). Writing to the physical 0x90000000 therefore hits an
-+ * unmapped address and nothing appears. 0xfffffe0017000000 is that mapping:
-+ * virt_base 0xfffffe0007000000 + 128 * 2MB, where 128 is the framebuffer's
-+ * L2 index for a 4K granule.
-+ */
++/* start.s builds an identity V=P bootstrap mapping for this board, so the
++ * physical framebuffer address is also the VA used by the early console. */
 +#define UGG_EARLY_FB_PA   0x90000000UL          /* physical, for the TTE */
-+#define UGG_EARLY_FB      0xfffffe0017000000UL  /* mapped VA, for drawing */
++#define UGG_EARLY_FB      0x90000000UL          /* also the VA, V=P is identity */
 +#define UGG_EARLY_WIDTH   720u
 +#define UGG_EARLY_HEIGHT  1280u
 +#define UGG_EARLY_STRIDE  2160u

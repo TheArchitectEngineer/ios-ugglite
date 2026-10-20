@@ -1,8 +1,43 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## Agent handoff / active work (2026-10-15, latest)
+## Agent handoff / active work (2026-10-20, latest)
 
-### >>> UPDATE 2026-10-20 (latest): ugglite kernel builds; XNU executes start.s and hangs <<<
+### >>> ACTIVE: port iOS to ugglite; fix early framebuffer VA and rebuild <<<
+
+The project goal is to boot iOS on the Redmi Note 5A (`ugglite`). The following
+hardware progress is user-reported on 2026-10-20 and was not independently
+re-observed in this session:
+
+- The kernel builds and boots through shim handoff. XNU completes `start.s`;
+  ten color bands verify boot arguments, bootstrap page tables, translation
+  registers, cache/TLB invalidation and MMU enable.
+- `arm_init` is running: `sweet_early_mark(1)` paints a thin green line at the
+  bottom of the panel.
+- The early console's byte addressing, 24-bpp pixel path and panel geometry
+  (720x1280, 2160-byte stride, physical framebuffer `0x90000000`) are verified.
+
+**Current fix:** build 27 set `UGG_EARLY_FB` to `0xfffffe0017000000`, which
+maps to PA `0x9d500000`, not the panel. The `start.s` V=P bootstrap mapping
+is identity for this setup; drawing must use `0x90000000`. The working-tree
+patch corrects the address and removes the stale contradictory comment.
+`python3 tools/validate-repo.py` passed before commit (84 patches validated).
+
+**Next action:** commit the correction and this handoff, then dispatch:
+
+`gh workflow run xnu.yml -R cuwayo/ios-ugglite -f machine_config=UGGLITE -f keep_going=true`
+
+Record the commit, CI run ID and exact build result here. Download the
+`xnu-kernel` artifact to `xnu/out-0082` and verify the compiled framebuffer
+constant in disassembly before a temporary `fastboot boot`. Expected screen:
+solid green at `arm_init` entry.
+
+After solid green, continue the marker ladder through `PE_init_platform`,
+`ml_parse_cpu_topology`, `arm_vm_init` and `serial_init`; then proceed to UFS
+root and GICv2 interrupts. Do not modify device partitions during bring-up.
+
+### Historical handoff (superseded by the active status above)
+
+### >>> UPDATE 2026-10-20: earlier ugglite start.s hang investigation <<<
 
 **Read this first. The state below supersedes the earlier 10-20 section.**
 
