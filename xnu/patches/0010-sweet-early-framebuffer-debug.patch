@@ -399,7 +399,16 @@ new file mode 100644
 +
 +#if defined(BOARD_UGGLITE)
 +/* Redmi Note 5A: 720x1280 RGB888 at 0x90000000, 2160-byte rows. */
-+#define UGG_EARLY_FB      0x90000000UL
++/*
++ * start.s maps the splash framebuffer at VA virt_base + fb_index * 2MB, not
++ * at its physical address, and the early console runs with the MMU ON (it is
++ * called from arm_init). Writing to the physical 0x90000000 therefore hits an
++ * unmapped address and nothing appears. 0xfffffe0017000000 is that mapping:
++ * virt_base 0xfffffe0007000000 + 128 * 2MB, where 128 is the framebuffer's
++ * L2 index for a 4K granule.
++ */
++#define UGG_EARLY_FB_PA   0x90000000UL          /* physical, for the TTE */
++#define UGG_EARLY_FB      0xfffffe0017000000UL  /* mapped VA, for drawing */
 +#define UGG_EARLY_WIDTH   720u
 +#define UGG_EARLY_HEIGHT  1280u
 +#define UGG_EARLY_STRIDE  2160u
