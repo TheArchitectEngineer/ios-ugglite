@@ -127,8 +127,14 @@ static void __attribute__((noreturn)) reset(unsigned after_s)
 
 static void irq_handler(void)
 {
+#if GIC_IS_V2
+	/* GICv2: acknowledge from the CPU interface's MMIO IAR. */
+	uint32_t iar = *(volatile uint32_t *)(GICC_BASE + 0x00c);
+	uint32_t id = iar & 0xffffff;
+#else
 	uint64_t iar = rsr("icc_iar1_el1");
 	uint32_t id = iar & 0xffffff;
+#endif
 
 	if (id >= 1020 && id <= 1023)
 		return;	/* spurious */
@@ -141,7 +147,11 @@ static void irq_handler(void)
 		wsr("cntv_tval_el0", rsr("cntfrq_el0") / 100);	/* 10 ms */
 	else if (id == PTIMER_INTID)
 		wsr("cntp_tval_el0", rsr("cntfrq_el0") / 100);
+#if GIC_IS_V2
+	*(volatile uint32_t *)(GICC_BASE + 0x010) = iar;
+#else
 	wsr("icc_eoir1_el1", iar);
+#endif
 	isb();
 }
 
@@ -149,6 +159,16 @@ void exc_handler(uint64_t slot, uint64_t *regs)
 {
 	if (slot == 5) {	/* IRQ from current EL, SPx */
 		irq_handler();
+		/* If the watchdog fired while XNU was running, show where it was. */
+		if (irq_last == VTIMER_INTID && regs != 0) {
+			con_clear(BLUE);
+			con_str("WATCHDOG", "XNU hung with IRQs enabled");
+			con_hex("ELR", rsr("elr_el1"));
+			con_hex("SPSR", rsr("spsr_el1"));
+			con_hex("ESR", rsr("esr_el1"));
+			for (;;)
+				__asm__ volatile("wfe");
+		}
 		return;
 	}
 	con_clear(BLUE);

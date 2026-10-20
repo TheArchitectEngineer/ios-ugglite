@@ -1,29 +1,10 @@
 --- a/osfmk/arm64/start.s
 +++ b/osfmk/arm64/start.s
-@@ -692,6 +692,17 @@
- 	add		x3, x1, PGBYTES
- 	mov		x2, x3
- 
+@@ -570,6 +570,15 @@
+ 	ldr		x24, [x20, BA_MEM_SIZE]				// Get the physical memory size
+ 	adrp	x25, EXT(bootstrap_pagetables)@page	// Get the start of the page tables
+ 	ldr		x26, [x20, BA_BOOT_FLAGS]			// Get the kernel boot flags
 +#if defined(BOARD_UGGLITE)
-+	/* Bring-up marker A: about to build the V=P bootstrap mapping. */
-+	MOV64	x10, 0x90000000
-+	mov		w11, #0xff00ffff
-+	mov		x12, #64
-+1:	str		w11, [x10], #4
-+	subs	x12, x12, #1
-+	b.ne	1b
-+	dsb		sy
-+#endif
-+
- 	/*
- 	 * Setup the V=P bootstrap mapping
- 	 * x5 - total number of L2 entries to allocate
-@@ -725,6 +736,17 @@
- 	str		x11, [x13, x12, lsl #TTE_SHIFT]
- #endif
- 
-+#if defined(BOARD_UGGLITE)
-+	/* Bring-up marker B: bootstrap mappings built. */
 +	MOV64	x10, 0x90000000
 +	mov		w11, #0xff0000ff
 +	mov		x12, #64
@@ -32,7 +13,54 @@
 +	b.ne	1b
 +	dsb		sy
 +#endif
-+
+ 
+ 	// Clear the registers that will be used to store the userspace thread pointer and CPU number.
+ 	// We may not actually be booting from ordinal CPU 0, so this register will be updated
+@@ -694,6 +703,15 @@
+ 
+ 	/*
+ 	 * Setup the V=P bootstrap mapping
++#if defined(BOARD_UGGLITE)
++	MOV64	x10, 0x90000000
++	mov		w11, #0xffffff00
++	mov		x12, #64
++1:	str		w11, [x10], #4
++	subs	x12, x12, #1
++	b.ne	1b
++	dsb		sy
++#endif
+ 	 * x5 - total number of L2 entries to allocate
+ 	 */
+ 	lsr		x5,  x24, #(ARM_TT_L2_SHIFT)
+@@ -703,6 +721,15 @@
+ 	/* Setup the KVA bootstrap mapping */
+ 	lsr		x5,  x24, #(ARM_TT_L2_SHIFT)
+ 	create_bootstrap_mapping x14, x15, x5, x3, x2, x9, x10, x11, x12, x13
++#if defined(BOARD_UGGLITE)
++	MOV64	x10, 0x90000000
++	mov		w11, #0xffff00ff
++	mov		x12, #64
++1:	str		w11, [x10], #4
++	subs	x12, x12, #1
++	b.ne	1b
++	dsb		sy
++#endif
+ 
+ #if defined(SWEET)
+ 	/*
+@@ -728,6 +755,15 @@
  	/* Ensure TTEs are visible */
  	dsb		ish
+ 
++#if defined(BOARD_UGGLITE)
++	MOV64	x10, 0x90000000
++	mov		w11, #0xff00ffff
++	mov		x12, #64
++1:	str		w11, [x10], #4
++	subs	x12, x12, #1
++	b.ne	1b
++	dsb		sy
++#endif
+ 
+ 	b		common_start
  

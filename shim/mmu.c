@@ -174,3 +174,56 @@ uint64_t mmu_probe(uintptr_t va)
 	__asm__ volatile("at s1e1r, %0; isb" : : "r"(va) : "memory");
 	return rsr("par_el1");
 }
+
+/*
+ * Map the kernel's LINK address range onto the physical range it was loaded
+ * at, through TTBR1.
+ *
+ * XNU's start.s uses adrp (which yields link addresses) as physical addresses
+ * while the MMU is off: it clears bootstrap_pagetables and writes the bootstrap
+ * page tables before enabling the MMU. That only works when the kernel is
+ * loaded at its link address, as iBoot does. Our shim loads it at phys_base, so
+ * the link addresses must be mapped onto the real physical range first.
+ *
+ * The link address is 0xfffffe..., which is in the TTBR1 half of the address
+ * space, so this uses TTBR1 with T1SZ matching XNU's (T1SZ_BOOT = 26 for a 4K
+ * kernel with L1 subpages, i.e. a 38-bit VA). Using TTBR0 would collide with
+ * the identity mapping, because VA>>30 is 0 for both 0xfffffe0007... and 0.
+ */
+static uint64_t alias_pt[3 * NENT] __attribute__((aligned(4096)));
+
+int mmu_map_alias(uintptr_t va, uintptr_t pa, uint64_t size)
+{
+	uint64_t *top = alias_pt;
+	uint64_t blk = va >> BLK_SHIFT;
+	uint64_t nblk = (size + BLK_SIZE - 1) >> BLK_SHIFT;
+
+	if (nblk == 0 || nblk > 2)
+		return -1;
+
+	zero_table(top);
+	for (uint64_t i = 0; i < nblk; i++) {
+		uint64_t *l3 = alias_pt + (1 + i) * NENT;
+		for (int j = 0; j < NENT; j++) {
+			uint64_t off = ((uint64_t)i << BLK_SHIFT) + ((uint64_t)j << PG_SHIFT);
+			l3[j] = (pa + off) | WB_FLAGS | D_PAGE;
+		}
+		/* TTBR1 walks from the same top level; index by the VA's high bits. */
+		top[blk + i] = (uintptr_t)l3 | D_TABLE;
+	}
+
+	/*
+	 * Keep the TTBR0 half exactly as mmu_enable_range programmed it and only
+	 * fill in the TTBR1 half: T1SZ = 26 (38-bit VA, matching XNU's
+	 * T1SZ_BOOT for a 4K kernel with L1 subpages), TG1 = 4K, and clear EPD1
+	 * so TTBR1 walks happen at all.
+	 */
+	uint64_t tcr = TCR_VAL;
+	tcr &= ~((0x3fUL << 16) | (0x3UL << 30) | (1UL << 23));	/* T1SZ, TG1, EPD1 */
+	tcr |= (26UL << 16) | (0UL << 30);			/* T1SZ=26, TG1=4K */
+	wsr("ttbr1_el1", (uintptr_t)alias_pt);
+	wsr("tcr_el1", tcr);
+	__asm__ volatile("isb" ::: "memory");
+	__asm__ volatile("dsb sy; tlbi vmalle1; dsb nsh; isb" ::: "memory");
+	return 0;
+}

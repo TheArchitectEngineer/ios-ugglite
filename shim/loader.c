@@ -13,6 +13,9 @@
 #include "loader.h"
 #include "mmu.h"
 
+#define rsr(r) ({ uint64_t _v; __asm__ volatile("mrs %0, " r : "=r"(_v)); _v; })
+#define wsr(r, v) __asm__ volatile("msr " r ", %0" : : "r"((uint64_t)(v)))
+
 #define BOOT_LINE_LENGTH	608
 /*
  * Hardware page size for the boot_args placement. sweet is a 16K kernel;
@@ -186,6 +189,51 @@ const char *loader_boot(uintptr_t dtb)
 	 * on was a hypothesis that did not help, and it also risked unmapping
 	 * the shim's own code mid-flight.
 	 */
+	/*
+	 * Keep the shim's exception vectors installed across the jump.
+	 *
+	 * XNU sets VBAR_EL1 early (before it has mapped the vectors' address), so
+	 * any fault in its first instructions vectors into unmapped memory and
+	 * the machine simply stops with no output - exactly what we see. Pointing
+	 * VBAR_EL1 back at the shim's table means such a fault lands in
+	 * exc_handler(), which prints ESR/ELR/FAR on the panel and tells us which
+	 * instruction failed.
+	 */
+	{
+		extern char vectors[];
+		uintptr_t vb = (uintptr_t)vectors;
+
+		__asm__ volatile("msr vbar_el1, %0" : : "r"(vb) : "memory");
+		__asm__ volatile("isb" ::: "memory");
+	}
+
+	/*
+	 * Arm a one-shot watchdog before entering XNU: GICv2 distributor and CPU
+	 * interface enabled, virtual timer PPI unmasked, CNTV firing once about
+	 * a second from now. If XNU hangs in a loop (no exception, so the vector
+	 * table never runs) this interrupt still lands in the shim's handler,
+	 * which prints the interrupted PC. XNU masks interrupts itself early on,
+	 * so this only helps before that point - which is exactly where it hangs.
+	 */
+#if GIC_IS_V2
+	{
+		volatile uint32_t *gicd = (volatile uint32_t *)GICD_BASE;
+		volatile uint32_t *gicc = (volatile uint32_t *)GICC_BASE;
+		uint32_t ctfrq = (uint32_t)rsr("cntfrq_el0");
+
+		gicd[0x000 / 4] = 1;			/* GICD_CTLR enable */
+		gicd[0x080 / 4] = 0xffffffff;		/* IGROUPR0: all Group 1 */
+		gicd[0x100 / 4] = (1u << VTIMER_INTID);	/* ISENABLER0 */
+		gicd[0x400 / 4] = 0xa0a0a0a0;		/* IPRIORITYR0 */
+		gicc[0x004 / 4] = 0xff;			/* PMR */
+		gicc[0x000 / 4] = 1;			/* CTLR enable */
+
+		wsr("cntv_tval_el0", ctfrq);		/* ~1 s */
+		wsr("cntv_ctl_el0", 1);			/* enable, unmask */
+		__asm__ volatile("isb" ::: "memory");
+	}
+#endif
+
 	__asm__ volatile("dsb sy; ic iallu; dsb sy; isb" ::: "memory");
 
 	/*
