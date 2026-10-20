@@ -300,6 +300,20 @@ targets. The other two: `sweet_vtimer_intid` was declared in protos.h only for
 SWEET.h which an UGGLITE build does not include (now defined as 4 in
 UGGLITE.h). Commit 615778b; rebuild is run 39357781169.
 
+**Build 3 failed identically, and the cause was an inverted make condition
+(2026-10-20).** Patch 0004 guarded the arm64e default with
+`ifneq ($(filter $(CURRENT_MACHINE_CONFIG),SWEET UGGLITE),)`, which is true
+when the config IS one of those - so it set `arm64e` for exactly the targets
+that must not have it. Confirmed twice: a standalone makefile printed
+`UGGLITE -> arm64e` and `SWEET -> arm64e`, and the CI compile line carried
+`-DARM64_BOARD_CONFIG_UGGLITE -march=armv8-a -arch arm64e` together. Changed
+to `ifeq`; now UGGLITE and SWEET give `arm64` and other configs `arm64e`.
+**Consequence worth remembering: SWEET has been building as arm64e in this
+tree all along**, despite the comment claiming otherwise. It only worked
+because clang still accepted the arm64e target alongside
+`-march=armv8.2-a+crypto`. Both boards are PAC-less and should be plain arm64,
+so this is a real fix for sweet too, not just ugglite.
+
 **GICv2 IPI fixed in patch 0083 (2026-10-20).** `SweetCPU::signalCPU()`
 (patch 0018, rewritten by 0065) sent the cross-CPU signal with
 `ICC_SGI1R_EL1`, a GICv3 system register that a GICv2 CPU interface does not
