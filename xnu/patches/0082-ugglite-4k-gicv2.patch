@@ -243,13 +243,12 @@
  #else
 --- a/pexpert/pexpert/arm/protos.h
 +++ b/pexpert/pexpert/arm/protos.h
-@@ -36,8 +36,11 @@
+@@ -36,8 +36,12 @@
  int uart_getc(void);
  
  void pe_init_fiq(void);
--#if defined(ARM64_BOARD_CONFIG_SWEET)
--extern uint32_t sweet_vtimer_intid;
-+#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_UGGLITE)
+ #if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_UGGLITE)
+ extern uint32_t sweet_vtimer_intid;
 +/* GIC acknowledge / end-of-interrupt; GICv3 uses ICC_* system registers,
 + * GICv2 reads the CPU interface. Implemented in pexpert/arm/pe_fiq.c. */
 +uint64_t sweet_gic_ack(void);
@@ -308,15 +307,6 @@
  
  
  #
-@@ -261,7 +262,7 @@
- export ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG := $(shell echo $(CURRENT_ARCH_CONFIG) | tr A-Z a-z)
- ifneq ($(filter arm64,$(ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG)),)
- # sweet's Cortex-A76/A55 have no pointer authentication: stay plain arm64
--ifneq ($(CURRENT_MACHINE_CONFIG),SWEET)
-+ifneq ($(filter $(CURRENT_MACHINE_CONFIG),SWEET UGGLITE),)
- export ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG := arm64e
- endif
- endif
 --- /dev/null
 +++ b/pexpert/pexpert/arm64/UGGLITE.h
 @@ -0,0 +1,88 @@
@@ -353,6 +343,12 @@
 +#define UGGLITE                   1
 +#define SWEET                     1     /* shares the SWEET driver code paths */
 +#define SWEET_GIC_V2              1     /* selects the GICv2 implementation */
++
++/*
++ * Four homogeneous A53s. SWEET's own limit is 6 (six A55s) and lives in
++ * SWEET.h, which this build does not include, so the clamp is defined here.
++ */
++#define SWEET_SMP_MAX_CPUS        4
 +
 +#define ARM_ARCH_TIMER
 +#define __ARM_ARCH__              8
