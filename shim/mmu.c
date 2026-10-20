@@ -91,6 +91,20 @@ static void zero_table(uint64_t *t)
 
 int mmu_enable(struct mmu_info *info)
 {
+	return mmu_enable_range(info, 0, 0);
+}
+
+/*
+ * Map [ram_lo, ram_hi) as Normal write-back in addition to the shim image.
+ *
+ * XNU is entered with the MMU on so that its first instruction fetch comes
+ * from cacheable memory. Fetching from Device-nGnRnE (what you get with the
+ * MMU off) is architecturally constrained-unpredictable, and on this A53 it
+ * produced exactly the observed symptom: the branch to the entry point never
+ * produced any output at all.
+ */
+int mmu_enable_range(struct mmu_info *info, uintptr_t ram_lo, uintptr_t ram_hi)
+{
 	uintptr_t img_lo = (uintptr_t)_head & ~(PG_SIZE - 1);
 	uintptr_t img_hi = ((uintptr_t)_end + PG_SIZE - 1) & ~(PG_SIZE - 1);
 	uintptr_t pool = ((uintptr_t)pt_pool + PG_SIZE - 1) & ~(PG_SIZE - 1);
@@ -109,13 +123,26 @@ int mmu_enable(struct mmu_info *info)
 		top[i] = (i << BLK_SHIFT) | DEV_FLAGS | D_BLOCK;
 	top[FB_PHYS >> BLK_SHIFT] = (FB_PHYS & ~(BLK_SIZE - 1)) | NC_FLAGS | D_BLOCK;
 
-	/* L3 for each block that holds part of the image. */
-	for (uint64_t blk = img_lo >> BLK_SHIFT; blk <= (img_hi - 1) >> BLK_SHIFT; blk++) {
+	/*
+	 * L3 for each block that holds part of the image or the kernel RAM.
+	 * Both ranges are walked; a block shared by both gets one table.
+	 */
+	uint64_t blk_first = img_lo >> BLK_SHIFT;
+	uint64_t blk_last = (img_hi - 1) >> BLK_SHIFT;
+	if (ram_hi) {
+		uint64_t rlo = ram_lo >> BLK_SHIFT, rhi = (ram_hi - 1) >> BLK_SHIFT;
+		if (rlo < blk_first) blk_first = rlo;
+		if (rhi > blk_last) blk_last = rhi;
+	}
+	if (blk_last - blk_first > 2)
+		return -1;	/* pt_pool holds 1 top table + 3 L3 tables */
+	for (uint64_t blk = blk_first; blk <= blk_last; blk++) {
 		uint64_t *l3 = (uint64_t *)(pool + (1 + n_l3++) * PG_SIZE);
 		uint64_t base = blk << BLK_SHIFT;
 		for (int i = 0; i < NENT; i++) {
 			uint64_t pa = base + ((uint64_t)i << PG_SHIFT);
-			int ours = pa >= img_lo && pa < img_hi;
+			int ours = (pa >= img_lo && pa < img_hi) ||
+			    (ram_hi && pa >= ram_lo && pa < ram_hi);
 			l3[i] = pa | (ours ? WB_FLAGS : DEV_FLAGS) | D_PAGE;
 		}
 		top[blk] = (uintptr_t)l3 | D_TABLE;

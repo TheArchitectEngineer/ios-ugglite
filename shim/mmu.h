@@ -9,4 +9,5 @@ struct mmu_info {
 };
 
 int mmu_enable(struct mmu_info *info);
+int mmu_enable_range(struct mmu_info *info, uintptr_t ram_lo, uintptr_t ram_hi);
 uint64_t mmu_probe(uintptr_t va);

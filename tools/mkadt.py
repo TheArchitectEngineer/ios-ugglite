@@ -41,8 +41,13 @@ QEMU_VTIMER_INTID = 27
 # Two 1 GiB banks, no upper bank. The kernel cannot live in the carve-outs, so
 # use bank 1 starting above the highest fixed region (0x8ce00000 wcnss_fw) and
 # stop below ramoops at 0xb0000000. Dynamic pools are limited below 4G.
-UGG_PHYS_BASE = 0x8d000000
-UGG_MEM_SIZE = 0x23000000          # 0x8d000000 .. 0xb0000000 = 560 MiB
+# Start ABOVE the last fixed carve-out in this bank. The live device tree has
+# wcnss_fw at 0x8ce00000+0x700000, i.e. ending at 0x8d500000; a kernel loaded
+# at 0x8d000000 overlapped it by 5 MiB and those pages are XPU-protected, so
+# writes were dropped and the first instruction fetch faulted (the "JUMP then
+# nothing" symptom). 0x8d500000 is also 1 MiB aligned.
+UGG_PHYS_BASE = 0x8d500000
+UGG_MEM_SIZE = 0x2b00000          # 0x8d500000 .. 0xb0000000 = 688 MiB
 UGG_GICD, UGG_GICD_SIZE = 0x0b000000, 0x1000
 UGG_GICC, UGG_GICC_SIZE = 0x0b002000, 0x1000
 UGG_VTIMER_INTID = 20              # PPI 4: secure-phys/phys/virt/hyp = 2/3/4/1

@@ -11,6 +11,7 @@
 #include "console.h"
 #include "fdt.h"
 #include "loader.h"
+#include "mmu.h"
 
 #define BOOT_LINE_LENGTH	608
 /*
@@ -159,10 +160,35 @@ const char *loader_boot(uintptr_t dtb)
 	con_hex2("BOOTARG", "pa=", ba_pa, "top=", top);
 
 	uintptr_t entry_pa = p->entry_va + pa_of_va_base;
+	/*
+	 * Prove the copy landed: read the first word back from the entry point
+	 * and from phys_base. If these do not match the payload's bytes, the
+	 * destination is not writable RAM (an XPU carve-out, or the wrong base),
+	 * which is a very different failure from a bad entry address.
+	 */
+	con_hex("WROTE", *(volatile uint32_t *)entry_pa);
+	con_hex("EXPECT", *(const uint32_t *)(rd_start +
+	    (p->segs[2].file_off + (p->entry_va - p->segs[2].vmaddr))));
 	con_hex("JUMP", entry_pa);
 	con_str("XNU", "jumping (fbcon clears screen)");
 
 	/* Everything was written with the MMU and caches off; drop any stale I-cache lines too. */
+	/*
+	 * Enter XNU with the MMU ON and its RAM mapped Normal write-back.
+	 * With the MMU off every fetch is Device-nGnRnE, and instruction fetch
+	 * from Device memory is constrained-unpredictable; on this A53 the
+	 * branch to the entry point then produced no output at all. XNU's own
+	 * start.s reprograms the MMU from scratch, so the mapping only has to
+	 * be sane for the first few instructions.
+	 */
+	{
+		struct mmu_info mi;
+		uintptr_t lo = p->phys_base & ~0x3ffUL;
+		uintptr_t hi = (p->phys_base + p->mem_size + 0x3ffUL) & ~0x3ffUL;
+
+		mmu_enable_range(&mi, lo, hi);
+	}
+
 	__asm__ volatile("dsb sy; ic iallu; dsb sy; isb" ::: "memory");
 	((xnu_entry_t)entry_pa)(ba_pa);
 	return "xnu returned";
