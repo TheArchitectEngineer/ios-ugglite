@@ -2,104 +2,95 @@
 
 ## Agent handoff / active work (2026-10-20, latest)
 
-### >>> ACTIVE: root cause of the post-MMU hang FOUND in QEMU; patch 0088 ready for CI <<<
+### >>> ACTIVE: patch 0088 BUILT and reaches arm_init in QEMU; next blocker is the ADT deref <<<
 
 **Read this section first. It supersedes the 0087 "panel observation pending"
 state below, which is now resolved.**
 
-QEMU now reproduces the hardware failure exactly, and it names the fault:
-with the 0087 kernel at its configured `phys_base`, the first fetch after
-`MSR SCTLR_EL1` takes an **instruction abort, ESR `0x86000004` = translation
-fault at level 0**, `FAR = ELR = 0xfffffe0007a72abc` (`_arm_init`). That is
-the "row-160 stripe never appears" symptom on the phone. Three defects cause
-it; all three are fixed in patch 0088.
+**CI run `39441039376` (commit `46e6e4e`) built patch 0088 successfully**,
+6m58s. Artifact `xnu/out-0088/kernel.development.ugglite`, 16,816,2xx bytes,
+SHA256 `2bb01fc68c31ef0a39081fa0c4199ceb7de777e5b730baf38f36d9a85dc85cda`;
+`SHA256SUMS` verifies. Payload `shim/out/payload-0088-real.bin` (SHA256
+`1a86da32ef02eaf03bef01e4aba807a0cbb6f1ffae81199c9ef8a686a8e0f0f1`) was
+built from it and `shim/out/ugglite-0088.adt` (SHA256
+`86d760b7fee8e5862e7577d3f729b44c84e1641e29606782ff30759ba6781bf8`,
+dram-base **0x8d600000** + 554 MiB).
 
-**How to reproduce (no phone, ~30 s):**
+**The real 0088 kernel now reaches `arm_init` in QEMU with no image patching:**
 
-    python3 tools/qemu-ugglite.py shim/out/payload-0088.bin /tmp/q --secs 12
-    python3 tools/qemu-ugglite.py shim/out/payload-0088.bin /tmp/q --secs 12 \
-        --patch-0088 0xfffffe0007174a10      # rewrites the prebuilt kernel
+    python3 tools/qemu-ugglite.py shim/out/payload-0088-real.bin OUT --secs 15
+    -> status: reached_arm_init, arm_init_green_pct: 74.11
+       first_exception: Undefined Instruction at ELR 0xfffffe00072c1dc4
 
-Without `--patch-0088` the run reports `did_not_reach_arm_init` and the
-`0x86000004` abort. With it, `arm_init()` runs and paints the panel: the
-harness reports `arm_init_green_pct ~77-82` and
-`status: reached_arm_init`. gdb: `--gdb 1234` starts QEMU halted with a stub;
-the recipe is in the tool's docstring.
+That is `_DebuggerTrapWithState+0x84`, and the word there is **`0xe7ffdeff`,
+the ARM `BRK` debugger trap** - not an illegal instruction. The kernel is
+deliberately entering the debugger (panic path), then faulting because the
+exception vector at `0xfffffe0007441000` is not mapped
+(`ESR 0x86000005`, `FAR 0x0`). So the kernel panics *after* `arm_init`'s
+stage-2 mark, and the current inability to see why is exactly the missing
+early exception reporter (task 4).
 
-**The three defects (each independently proven necessary by QEMU):**
+Before 0088 the same payload gave `ESR 0x86000004` (level-0 translation
+fault) at `arm_init`; that fault is gone. **The MMU transition works.**
+
+**The three defects 0088 fixes (each independently proven necessary in QEMU):**
 
 1. **T0SZ/T1SZ were 23, but the tables are built for a 48-bit VA.**
    `start.s`'s `create_l0_table_entry` masks with `ARM_TT_L0_INDEX_MASK`
    (bits 47:39, a 9-bit L0 index), and so does `pmap_table_level_info_4k[]`.
    `T1SZ=23` is a 41-bit VA, whose hardware L0 index is only `VA[40:39]`
-   (2 bits), so every bootstrap entry is written at index 0x1fc while the
-   walk reads index 0. Result: level-0 translation fault on the first fetch.
-   Patch 0088 sets **T0SZ = T1SZ = 16** (48-bit, 9-bit L0 index). The
-   resulting `TCR_EL1` is `0x22a5102510`; recomputing it from the patched
-   macros gives the same value, and that is the value QEMU validated.
-   `pta_root_level = (T0SZ_BOOT - 16) / 9` stays 0 either way, so pmap's
-   root is still L0 - but now the index width agrees.
-   *(This corrects 0086/0087, which chose 23 to fit `VM_KERNEL_LINK_ADDRESS`
-   into the TTBR1 region. 16 also contains it, with room to spare: the TTBR1
-   base is 0xffff000000000000 and the link address is 0xfffffe0007004000.)*
+   (2 bits), so every bootstrap entry was written at index 0x1fc while the
+   walk read index 0. Patch 0088 sets **T0SZ = T1SZ = 16** (48-bit,
+   9-bit L0 index); `pta_root_level = (T0SZ_BOOT-16)/9` stays 0.
+   *(0086/0087 chose 23 to fit `VM_KERNEL_LINK_ADDRESS` into the TTBR1
+   region; 16 also contains it, with room to spare.)*
 
 2. **Marker 1 clobbered `x14`, the KVA virtual cursor.**
-   `mov x14, x22` / `mov x15, x23` set the KVA cursors; the diagnostic marker
-   between the V=P mapping and the KVA `create_bootstrap_mapping` used `w14`
-   as pixel scratch, leaving `x14 = 0xff`. QEMU shows `x14=0xff` at the KVA
-   call site (it should be `0xfffffe0007004000`), so the KVA bootstrap
-   mapping was built from VA 0xff and the kernel's own link range was never
-   mapped. All 11 Ugglite marker blocks now use **`w16`** (verified unused
-   anywhere in `start.s`). This is why 0085-0087 could never work even with
-   the right TCR: the markers were eating the state they were diagnosing.
+   `mov x14, x22` / `mov x15, x23` set the KVA cursors; the marker between
+   the V=P mapping and the KVA `create_bootstrap_mapping` used `w14` as pixel
+   scratch, leaving `x14 = 0xff` (QEMU shows this at the call site), so the
+   kernel's own link range was never mapped. All 11 Ugglite markers now use
+   **`w16`**, verified unused anywhere in `start.s`.
 
-3. **825 LSE atomic instructions on a core that has none.**
+3. **LSE atomics on a core that has none.**
    `-march=armv8-a` is not sufficient with Apple clang: `__c11_atomic_*`
-   (which `os_atomic_*` lowers to via `<stdatomic.h>`) still emits
-   `ldadd`/`ldclr`/`ldset`/`swp`. The A53 is ARMv8.0, `ID_AA64ISAR0_EL1[23:20]
-   = 0`, so these are UNDEFINED. Reproduced on the host with a 6-line C file
-   under `-mkernel -march=armv8-a`; `-mcpu=cortex-a53` emits `ldaxr/stxr`
-   instead. QEMU's A53 model traps at `_lck_grp_reference+0x8`
-   (`ldadd w8, w8, [x1]`), the first one reached. `MACHINE_FLAGS_ARM64_UGGLITE`
-   now uses **`-mcpu=cortex-a53`**. This is a *second, independent* blocker
-   that would have stopped the boot right after `arm_init` started.
+   (what `os_atomic_*` lowers to) still emits `ldadd`/`ldclr`/`ldset`/`swp`/
+   `casal`. The A53 is ARMv8.0 (`ID_AA64ISAR0_EL1[23:20] = 0`), so these are
+   UNDEFINED; 0087 shipped 825 of them. `MACHINE_FLAGS_ARM64_UGGLITE` now uses
+   **`-mcpu=cortex-a53`**, which emits `ldaxr/stxr`. That also made the
+   assembler *reject* the two explicit `casa` in
+   `osfmk/arm/commpage/commpage_asm.s` (CI `39439314139` failed there with
+   "instruction requires: lse"); 0088 replaces them with the LL/SC pair under
+   `BOARD_UGGLITE`.
 
-**Also fixed: `phys_base` must be 2 MiB aligned.** `start.s` maps the kernel
-with 2 MiB L2 blocks and masks the physical address with
-`ARM_TTE_BLOCK_L2_MASK` (0xffffffe00000). The old `0x8d500000` is not aligned,
-so it was silently rounded to `0x8d400000` - the V=P mapping pointed 1 MiB
-below the real kernel. QEMU: `0x8d500000` fails, while `0x8d600000`,
-`0x8d800000`, `0x8da00000` and `0x8dc00000` all reach `arm_init`.
-`tools/mkadt.py --ugglite` now uses `0x8d600000` + 554 MiB (still above the
-wcnss_fw carve-out ending at 0x8d500000 and below ramoops at 0xb0000000).
-`tools/qemu-ugglite.py` refuses an unaligned base unless `--allow-unaligned`.
+**Also fixed: `phys_base` must be 2 MiB aligned.** `start.s` masks the
+physical address with `ARM_TTE_BLOCK_L2_MASK` when it builds 2 MiB blocks, so
+the old `0x8d500000` was silently rounded to `0x8d400000`. QEMU: `0x8d500000`
+fails; `0x8d600000`/`0x8d800000`/`0x8da00000`/`0x8dc00000` all reach
+`arm_init`. `tools/mkadt.py --ugglite` now uses `0x8d600000` + 554 MiB.
 
-**State of the artifacts (all local, none committed as binaries):**
-`shim/out/ugglite-0088.adt` (regenerated, dram-base 0x8d600000) and
-`shim/out/payload-0088.bin` (from the 0087 kernel + that ADT, same cmdline).
-**The kernel binary is still the 0087 build**: it predates patch 0088, so
-`tools/qemu-ugglite.py --patch-0088` rewrites the two edited instructions in
-the image to emulate the patch. A real CI build of 0088 has NOT been run yet.
+**Known residue (not on the early path, deliberately left):** the 0088
+binary still contains **12 LSE instructions** in `_firehose_buffer_*`
+(`os_log`'s ring) and `K256`. Those are Apple closed-source libkern objects
+not present in the source tree, so `-mcpu=cortex-a53` cannot re-codegen them;
+`_firehose_*` would fault on first use. They are not reached before the panic
+above. Options when it matters: patch those objects out for UGGLITE, or route
+the `os_log` ring through an LL/SC shim.
 
-**NEXT CONCRETE ACTION:** dispatch a CI build of patch 0088
-(`gh workflow run xnu.yml -R cuwayo/ios-ugglite -f machine_config=UGGLITE`),
-then (a) confirm the 0088 binary contains **zero** LSE mnemonics
-(`llvm-objdump -d ... | grep -cE 'ldadd|ldclr|ldeor|ldset|swp'`) and reads
-`TCR_EL1 = 0x22a5102510` at `sysreg_restore`, and (b) run it in QEMU with
-`tools/qemu-ugglite.py` (no `--patch-0088`) expecting `reached_arm_init`.
-Only then rebuild the temporary `fastboot boot` image and ask the user for the
-panel observation.
+**NEXT CONCRETE ACTION:** the kernel panics right after `arm_init`'s stage-2
+mark and the panic is invisible because the vector at `0xfffffe0007441000`
+is unmapped. Two ways forward, in order:
+1. **Add the early VBAR_EL1 reporter (task 4)** so the panic prints ESR/ELR/
+   FAR and its message on the panel instead of vanishing. It should install
+   before the MMU is touched and use non-cacheable stores.
+2. In QEMU first (cheap): break at `_DebuggerTrapWithState` and walk back, or
+   use `-d int` plus the `BRK` immediate to find the caller; the panic string
+   is in `__cstring`, so a QEMU memory scan for the message after the stop is
+   also viable.
 
-**What QEMU says comes next (not yet fixed).** With the three fixes applied,
-the first exception is a **Data Abort at `FAR 0x220`, ESR `0x96000005`**
-(translation fault, level 1) from `ELR 0xfffffe000691a7f4`, followed by a
-stream of Undefined Instructions. `0x220` is inside the *device tree*
-(ADT) header area, and `0xfffffe000691a7f4` is below `__mh_execute_header`
-(0xfffffe0007004000), i.e. outside the kernel image - so the kernel is
-dereferencing a bad pointer out of the ADT/boot_args rather than executing
-its own code. That is the next thing to chase; it is no longer the MMU.
-`arm_init`'s stage-1 green fill and stage-2 marker are both on the panel, so
-`PE_init_platform` is being entered around this point.
+Only after the panic is understood: rebuild the temporary `fastboot boot`
+image and ask the user for the panel observation. **Do not claim the MMU fix
+works on hardware until that observation exists** - QEMU is not the phone.
 
 ### >>> HISTORICAL: 0087 built and booted, panel observation pending <<<
 
