@@ -300,15 +300,17 @@ targets. The other two: `sweet_vtimer_intid` was declared in protos.h only for
 SWEET.h which an UGGLITE build does not include (now defined as 4 in
 UGGLITE.h). Commit 615778b; rebuild is run 39357781169.
 
-**KNOWN RUNTIME BUG still to fix (GICv2 has no ICC_SGI1R_EL1):**
-`SweetCPU::signalCPU()` (patch 0018, rewritten by 0065) sends the cross-CPU
-signal with `ICC_SGI1R_EL1`, which is a GICv3 system register. A GICv2 CPU
-interface has no such register - the SGI is raised by writing the distributor's
-`GICD_SGIR` (0xf00) with the target list and INTID. On ugglite the write would
-be UNDEFINED or ignored, so SMP would hang in the self-SGI check or panic
-"SWEET CPU: SGI1 self-test timed out". This compiles, so CI will not catch it;
-it needs a `SWEET_GIC_V2` branch in signalCPU writing GICD_SGIR, and should be
-done before any multi-core ugglite boot. Single-core (`cpus=1`) is unaffected.
+**GICv2 IPI fixed in patch 0083 (2026-10-20).** `SweetCPU::signalCPU()`
+(patch 0018, rewritten by 0065) sent the cross-CPU signal with
+`ICC_SGI1R_EL1`, a GICv3 system register that a GICv2 CPU interface does not
+have - on ugglite that write is UNDEFINED, so SMP would have hung in the
+self-SGI check or panicked "SGI1 self-test timed out". CI cannot catch this
+because it compiles. 0083 adds a `SWEET_GIC_V2` branch that writes the
+distributor's `GICD_SGIR` (0xf00) instead: INTID in [23:16], target list in
+[15:0], filter 0b00. The write goes through a new `sweet_gic_send_sgi()` in
+pe_fiq.c, which reuses the distributor window `pe_init_fiq()` already mapped,
+rather than remapping per interrupt. Single-core (`cpus=1`) never took this
+path, so it was never at risk.
 
 **Repo moved 2026-10-20:** the tree is now pushed to **`cuwayo/ios-ugglite`**
 (the original `dipa-studio/ios-sweet` is not writable by this account). The

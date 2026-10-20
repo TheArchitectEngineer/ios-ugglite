@@ -1,0 +1,73 @@
+--- a/iokit/Kernel/arm/SweetCPU.cpp
++++ b/iokit/Kernel/arm/SweetCPU.cpp
+@@ -219,6 +219,21 @@
+ 	if (aff0 >= 16) {
+ 		panic("SWEET CPU: SGI target requires unsupported range selector");
+ 	}
++#if defined(SWEET_GIC_V2)
++	/*
++	 * GICv2 has no ICC_SGI1R_EL1: an SGI is raised by writing the
++	 * distributor's GICD_SGIR (0xf00):
++	 *   [25:24] target list filter, 0b00 = use the target list below
++	 *   [23:16] INTID
++	 *   [15:0]  target list, one bit per CPU interface
++	 * pe_init_fiq() already mapped the distributor, so this goes through
++	 * that same window instead of remapping it on every interrupt.
++	 */
++	uint32_t sgir = ((uint32_t)SWEET_IPI_SGI << 16) | (1U << aff0);
++	__builtin_arm_dsb(DSB_ISHST);
++	sweet_gic_send_sgi(sgir);
++	__builtin_arm_isb(ISB_SY);
++#else
+ 	uint64_t sgi = (((mpidr >> 32) & 0xff) << 48) |
+ 	    (((mpidr >> 16) & 0xff) << 32) |
+ 	    (((mpidr >> 8) & 0xff) << 16) |
+@@ -226,6 +241,7 @@
+ 	__builtin_arm_dsb(DSB_ISHST);
+ 	__builtin_arm_wsr64("ICC_SGI1R_EL1", sgi);
+ 	__builtin_arm_isb(ISB_SY);
++#endif
+ }
+ 
+ kern_return_t
+--- a/pexpert/arm/pe_fiq.c
++++ b/pexpert/arm/pe_fiq.c
+@@ -287,6 +287,16 @@
+ 	gicc2_write32(GICC_EOIR, (uint32_t)iar);
+ }
+ 
++/*
++ * GICv2 SGI: write the distributor's GICD_SGIR. The caller supplies the
++ * encoded value (INTID in [23:16], target list in [15:0]).
++ */
++void
++sweet_gic_send_sgi(uint32_t sgir)
++{
++	gicd2_write32(GICD_SGIR, sgir);
++}
++
+ void
+ pe_init_fiq()
+ {
+--- a/pexpert/pexpert/arm/protos.h
++++ b/pexpert/pexpert/arm/protos.h
+@@ -42,6 +42,9 @@
+  * GICv2 reads the CPU interface. Implemented in pexpert/arm/pe_fiq.c. */
+ uint64_t sweet_gic_ack(void);
+ void sweet_gic_eoi(uint64_t iar);
++#if defined(SWEET_GIC_V2)
++void sweet_gic_send_sgi(uint32_t sgir);
++#endif
+ #endif
+ 
+ #ifdef PRIVATE
+--- a/pexpert/pexpert/arm64/UGGLITE.h
++++ b/pexpert/pexpert/arm64/UGGLITE.h
+@@ -74,6 +74,7 @@
+ #define GICD_ISENABLER            0x100
+ #define GICD_IPRIORITYR           0x400
+ #define GICD_ICFGR                0xc00
++#define GICD_SGIR                 0xf00
+ 
+ #define GICC_CTLR                 0x000
+ #define GICC_PMR                  0x004
