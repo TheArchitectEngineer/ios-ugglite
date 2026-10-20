@@ -41,7 +41,7 @@
 + * DWC3 / PHY register blocks only when the GCC status registers say their
 + * power domain and clocks are on (an access to a gated block would hang).
 + */
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(SWEET_FAMILY)
 +#include <sys/param.h>
 +#include <sys/systm.h>
 +#include <pexpert/pexpert.h>

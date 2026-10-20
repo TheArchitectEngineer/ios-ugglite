@@ -16,7 +16,7 @@ diff --git a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
  		}
  	}
  
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(SWEET_FAMILY)
 +//
 +//	SWEET: root on a GPT partition of the internal UFS (bsd/dev/sweet_ufs.c)
 +//
@@ -58,7 +58,7 @@ new file mode 100644
 + * a 1 MiB bounce buffer); the host is not cache coherent, so caches are
 + * cleaned/invalidated around each command. Writes are refused.
 + */
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(SWEET_FAMILY)
 +#include <sys/param.h>
 +#include <sys/systm.h>
 +#include <sys/buf.h>

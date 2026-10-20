@@ -18,7 +18,7 @@
 + * against the partition bounds again right before it is issued, so nothing
 + * outside the named partition can be written.
   */
- #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #if defined(SWEET_FAMILY)
  #include <sys/param.h>
 @@ -86,6 +90,7 @@
  	uint8_t tag;

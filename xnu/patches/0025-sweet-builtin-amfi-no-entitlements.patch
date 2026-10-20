@@ -31,7 +31,7 @@ new file mode 100644
 + * Interfaces no kernel path uses on SWEET (they serve other Apple kexts)
 + * panic with a clear message instead of being NULL.
 + */
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(SWEET_FAMILY)
 +#include <kern/debug.h>
 +#include <kern/startup.h>
 +#include <libkern/amfi/amfi.h>

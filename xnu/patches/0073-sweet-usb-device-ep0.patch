@@ -1,7 +1,7 @@
 --- a/bsd/dev/sweet_usb.c
 +++ b/bsd/dev/sweet_usb.c
 @@ -13,10 +13,19 @@
- #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #if defined(SWEET_FAMILY)
  #include <sys/param.h>
  #include <sys/systm.h>
 +#include <kern/clock.h>

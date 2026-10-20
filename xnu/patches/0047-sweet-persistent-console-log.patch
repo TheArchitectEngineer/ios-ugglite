@@ -139,7 +139,7 @@
   *             waiting for an interrupt when the hardware device isn't ready
   * @param size The number of characters to print to the console.
   */
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(SWEET_FAMILY)
 +extern void sweet_log_append(const char *c, int size);  /* bsd/dev/sweet_ufs.c */
 +#endif
 +
@@ -148,7 +148,7 @@
  {
  	extern int disableConsoleOutput;
  
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(SWEET_FAMILY)
 +	sweet_log_append(c, size);
 +#endif
 +

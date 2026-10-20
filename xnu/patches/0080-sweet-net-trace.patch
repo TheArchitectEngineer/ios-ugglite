@@ -4,7 +4,7 @@
  		SIN6(info.rti_info[RTAX_DST])->sin6_addr.s6_addr16[1] = 0;
  	}
  
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(SWEET_FAMILY)
 +	/* SWEET: which process changes IPv4 routes (network bring-up). */
 +	if ((rtm->rtm_type == RTM_ADD || rtm->rtm_type == RTM_DELETE || rtm->rtm_type == RTM_CHANGE) &&
 +	    info.rti_info[RTAX_DST] != NULL && info.rti_info[RTAX_DST]->sa_family == AF_INET) {
@@ -32,7 +32,7 @@
  	/* In case it's NULL, make sure it came from the kernel */
  	VERIFY(so != NULL || p == kernproc);
  
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(SWEET_FAMILY)
 +	/* SWEET: which process sets IPv4 addresses on which interface. */
 +	if ((cmd == SIOCAIFADDR || cmd == SIOCDIFADDR) && ifp != NULL) {
 +		static int sweet_in_logged;

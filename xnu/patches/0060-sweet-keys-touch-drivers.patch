@@ -39,7 +39,7 @@
 + * PMIC access is READ ONLY: the sole MMIO write issues EXT_READL on an
 + * observer channel. No PMIC config, IRQ acknowledge or reset writes exist.
 + */
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(SWEET_FAMILY)
 +#include <sys/param.h>
 +#include <sys/systm.h>
 +#include <kern/clock.h>
@@ -225,7 +225,7 @@
 + * No firmware/config upload, RPMh votes or PMIC writes. Only IC data write:
 + * zero to GT9896's event status after reading a report. See hw-report.md.
 + */
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(SWEET_FAMILY)
 +#include <sys/param.h>
 +#include <sys/systm.h>
 +#include <sys/errno.h>

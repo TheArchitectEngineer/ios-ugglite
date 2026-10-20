@@ -4,7 +4,7 @@
  	return exception_triage_thread(exception, code, codeCnt, thread);
  }
  
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(SWEET_FAMILY)
 +#include <vm/vm_shared_region.h>
 +#include <arm/thread.h>
 +
@@ -67,7 +67,7 @@
  		subcode = ut->uu_subcode;
  		etype = ut->uu_exception;
  
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(SWEET_FAMILY)
 +		if (p == current_proc()) {
 +			extern void sweet_crash_log(const char *, int, int, uint64_t, uint64_t);
 +			sweet_crash_log(p->p_comm, proc_getpid(p), WTERMSIG(rv),

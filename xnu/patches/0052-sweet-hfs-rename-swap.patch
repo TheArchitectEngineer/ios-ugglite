@@ -4,7 +4,7 @@
  					_err = VNOP_RENAME(fdvp, *fvpp, fcnp, tdvp, *tvpp, tcnp, ctx);
  				}
  			}
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(SWEET_FAMILY)
 +			/*
 +			 * SWEET: HFS has no RENAME_SWAP, which Foundation's atomic
 +			 * writes use (usermanagerd: "Failed to atomically swap writing
