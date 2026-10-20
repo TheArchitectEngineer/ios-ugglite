@@ -2,64 +2,58 @@
 
 ## Agent handoff / active work (2026-10-20, latest)
 
-### >>> ACTIVE: port iOS to ugglite; map splash range and verify MMU handoff <<<
+### >>> ACTIVE: port iOS to ugglite; verify the post-MMU framebuffer path <<<
 
-The project goal is to boot iOS on the Redmi Note 5A (`ugglite`). The following
-hardware progress is user-reported on 2026-10-20 and was not independently
-re-observed in this session:
+The project goal is to boot iOS on the Redmi Note 5A (`ugglite`). The phone is
+currently in Android per the user's latest report. Do not reboot it or run
+device commands until the user says it is in fastboot. Use temporary
+`fastboot boot` images only; do not flash partitions.
 
-- The kernel builds and the shim hands off. The latest tested image displayed
-  the ten `start.s` diagnostic bands, proving execution reached the marker
-  immediately after the `SCTLR_EL1` write. That marker is before the following
-  `ISB`, so it does not prove the MMU transition completed.
-- The latest test did not show the solid-green early C fill; `arm_init` is not
-  yet confirmed. The reported panel geometry is 720x1280 RGB888, 2160-byte
-  stride, with the framebuffer at physical `0x90000000`.
-- Byte-addressed early-console arithmetic and the 24-bpp pixel path were
-  verified in the source and build, but the whole-panel fill is not yet
-  verified on hardware.
+**Hardware observation (user-reported, 2026-10-20):** the prior test showed
+yellow, cyan, magenta, green, blue, red, black, red, green and blue bands, with
+the rest of the panel white. The user then restarted Android. No row-160
+post-MMU marker or solid-green `arm_init` fill has yet been reported. The image
+hash supplied for that test (`81ec54d530473ec8e72bb5662b26d9e1a2adb0de76b8a0401283721a2425bb24`)
+does not match a recorded kernel artifact, so its exact build is unknown.
 
-**Earlier fix committed and built:** commit `15e1497` sets `UGG_EARLY_FB` to
-`0x90000000`, correcting build 27's `0xfffffe0017000000` (which maps to PA
-`0x9d500000`) and removing the stale contradictory comment. Repository
-validation passed (84 patches validated). GitHub Actions run `39402408243`
-used the exact commit SHA `15e1497fdac8626056026d1a2f59cd2f0ea79776` and
-completed successfully on 2026-10-20 09:49:30 UTC.
+**Committed fix:** `d4783de67f58f3c3fe81785a00fbd19a7ce4217c` adds patch 0085:
+ten consecutive 2 MiB L2 framebuffer entries for the 20 MiB Ugglite splash
+region, plus a diagnostic stripe at row 160 immediately after the MMU-enable
+`ISB`. CI run `39410383985` completed successfully on 2026-10-20 at 10:54:53
+UTC. `python3 tools/validate-repo.py` passed before the patch commit.
 
-The run's `xnu-kernel` artifact is in `xnu/out-0082`. Its SHA256 manifest
-passes; `kernel.development.ugglite` is a 16,799,832-byte arm64 Mach-O with
-SHA256 `421119cedbf1ec90cee3eaa0a6337af4de53083b48a3a3aec146b9605d85fd33`.
-Disassembly/data inspection confirms the early framebuffer pointer initializes
-to `0x90000000`; the marker path compiles for 720x1280 with a 2160-byte stride.
+The CI artifact is `xnu/out-0085/kernel.development.ugglite`, 16,816,216 bytes,
+arm64 Mach-O, SHA256
+`5e567e7fb33916b42d3601cf0e3b91532b62822bef7d8052c1191562421dcd22`; its
+`SHA256SUMS` check passes. Disassembly of `_start_first_cpu` confirms the
+Ugglite path uses a loop count of 10 with `0x200000` increments. It also
+confirms the post-MMU stripe stores at physical `0x90054600` after the `ISB`
+at `0xfffffe00074286d0`.
 
-**Hardware result (user-reported, 2026-10-20):** the image was temporarily
-booted, showed yellow, cyan, magenta, green, blue, red, black, red, green and
-blue bands with the rest of the panel white, then the user restarted Android.
-No solid-green `arm_init` fill was observed. The tested image was reported as
-SHA256 `81ec54d530473ec8e72bb5662b26d9e1a2adb0de76b8a0401283721a2425bb24`;
-this has not been matched to the kernel artifact hash above. The phone is now
-in Android; do not reboot it without asking.
+**Fresh temporary test image prepared, not yet booted:** `shim/out/shim-boot-0085-fbmap.img`,
+22,249,472 bytes, SHA256
+`9c19b2258b5d2beb0fa6242907ab3d618c3b90e31cbeea9be2a3e4a6df71d4b0`.
+It uses `shim/out/payload-0085.bin` (16,201,184 bytes, SHA256
+`9cbf2d209c1ac93b74e0bfbb14de291d8690c41325276c05767cafbe8b6fe2ba`), built
+from the 0085 kernel and `shim/out/ugglite-0085.adt` with
+`debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress`.
+There is no OS root ramdisk in this diagnostic payload. The local D22AP
+Apple-device-tree source was absent, so `mkadt.py` warned that `/product` was
+omitted; this does not affect the early kernel/framebuffer test. Boot-image
+unpacking confirms an Android header-v0 image with 2048-byte pages, and its
+ramdisk byte-matches `payload-0085.bin`. Previous boot images were preserved.
 
-**Current diagnosis, source-grounded but not yet hardware-confirmed:** the
-Ugglite build uses a 4 KiB hardware translation granule, so one L2 block maps
-2 MiB. The existing bootstrap code adds only one framebuffer L2 entry, while
-the stock DT reserves `0x01400000` (20 MiB) at `0x90000000`; the panel's
-720x1280 RGB888 surface alone is 2,764,800 bytes and crosses the first 2 MiB
-boundary. This can fault during the early C fill. Also, marker 9 is stored
-immediately after the `SCTLR_EL1` write but before the following `ISB`, so the
-last observed stripe does not establish that execution continued with the MMU
-enabled.
+**Next action:** ask the user to put the phone in fastboot manually and confirm
+when ready. Then run
+`fastboot boot shim/out/shim-boot-0085-fbmap.img`. Record whether the row-160
+stripe appears; a solid-green fill would confirm entry into `arm_init`. The
+device test is the remaining gate; build and disassembly alone do not prove the
+fix works on hardware.
 
-**Next patch:** `0085-ugg-framebuffer-map-and-post-mmu-marker.patch` maps all
-ten 2 MiB entries covering the reserved 20 MiB splash range and adds a
-distinct row-160 marker immediately after the MMU-enable `ISB`. Validate the
-patch series, commit, run GitHub Actions, and inspect the compiled constants
-before asking the user for a fastboot test. Do not flash partitions.
-
-After solid green, continue the marker ladder through `PE_init_platform`,
-`ml_parse_cpu_topology`, `arm_vm_init` and `serial_init`; then validate GICv2
-interrupts and add eMMC/SDHCI root support. Ugglite uses eMMC, not UFS. Do not
-modify device partitions during bring-up.
+After the MMU/`arm_init` path is confirmed, continue the marker ladder through
+`PE_init_platform`, `ml_parse_cpu_topology`, `arm_vm_init` and `serial_init`;
+then validate GICv2 interrupts and add eMMC/SDHCI root support. Ugglite uses
+eMMC, not UFS. Do not modify device partitions during bring-up.
 
 ### Historical handoff (superseded by the active status above)
 
