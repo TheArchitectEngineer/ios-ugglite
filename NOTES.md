@@ -1,11 +1,61 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## Agent handoff / active work (2026-10-20, latest)
+## Agent handoff / active work (2026-10-21, latest)
 
-### >>> ACTIVE: patch 0088 BUILT and reaches arm_init in QEMU; next blocker is the ADT deref <<<
+### >>> ACTIVE: 0088 CONFIRMED ON HARDWARE - the phone reaches arm_vm_init <<<
 
-**Read this section first. It supersedes the 0087 "panel observation pending"
-state below, which is now resolved.**
+**Read this first. It supersedes everything below about the post-MMU hang.**
+
+**Hardware result 2026-10-20 20:34 UTC (user-reported panel observation).**
+The 0088 image booted on the real Redmi Note 5A and the panel showed the
+**magenta marker plus the early-console line `SWEET EARLY 7: entering
+arm_vm_init`**. Stage 7 is `sweet_early_mark(7, ...)` in
+`osfmk/arm/arm_init.c:524`, emitted immediately before `arm_vm_init()`.
+
+**This is the first time the port has executed C code on real silicon.** The
+0082-0087 builds all died at `MSR SCTLR_EL1`; 0088 gets through the MMU
+enable, through `PE_init_platform`, `ml_parse_cpu_topology`,
+`cpu_bootstrap`, `kernel_startup_bootstrap` and `cpu_init` (stages 2-6), and
+into `arm_vm_init`. The QEMU prediction was correct on hardware, and the
+three defects recorded below (T0SZ/T1SZ geometry, the x14 marker clobber,
+LSE atomics) were the whole of the post-MMU failure.
+
+**The phone then hung inside `arm_vm_init`** - stage 8 ("leaving bootstrap
+TTBR0", from `sweet_early_disable`) never appeared. The device dropped off
+USB, then reset itself and came back to Android (verified: `adb shell
+getprop ro.product.device` -> `ugglite`, `/proc/uptime` 53 s). **Nothing was
+flashed**; this was a temporary `fastboot boot`.
+
+**Exact artifacts for that run:**
+- `shim/out/shim-boot-0088-l0.img`, 22,958,080 bytes, SHA256
+  `8db4770202f80b0a56b5e26c6b2f04ef240dafd274658090319f3ef6975e2e68`
+- kernel `xnu/out-0088/kernel.development.ugglite` (`2bb01fc6...`), payload
+  `shim/out/payload-0088-real.bin` (`1a86da32...`), ADT
+  `shim/out/ugglite-0088.adt` (dram-base `0x8d600000` + 554 MiB)
+- `fastboot -s 444fe4c1 boot ...` -> Sending OKAY 0.706 s, Booting OKAY 0.374 s
+
+**Where it now stops, and the next concrete action.** Stage 7 prints, stage 8
+does not, so the fault is somewhere in `arm_vm_init()`
+(`osfmk/arm64/arm_vm_init.c:1856`) before the `sweet_early_disable()` path.
+Note the existing ladder only has marks at 10, 11, 12, 13, 14 and 15 inside
+that function, and 10 is already deep in (`TTBR0 off; TLB flushed`) - so
+**the whole first half of `arm_vm_init` is unobserved**. Add finer marks
+early in the function, in this order, and keep them non-cacheable:
+`gPhysBase/gPhysSize` computed, after `alloc_ptpage` for `invalid_tte`, after
+`init_ptpages(gVirtBase ...)`, after the physmap `init_ptpages`, after
+`getsegdatafromheader` block, and just before `arm_vm_physmap_init`. The
+most likely candidates are `alloc_ptpage`/`phystokv` (needs the physmap
+aperture) and the `__BOOTDATA`/`__PAGEZERO` segment lookups.
+
+**Secondary, still open:** the 0088 binary contains 12 LSE instructions in
+`_firehose_buffer_*` (os_log ring) and `K256` - closed-source objects that
+`-mcpu=cortex-a53` cannot recompile. Not on the path to stage 7, but they
+will fault the first time `os_log` or that crypto path runs.
+
+### >>> HISTORICAL: patch 0088 built; QEMU analysis of the post-MMU hang <<<
+
+**Superseded by the hardware result above, kept because it explains why 0088
+works and gives the reproduction recipe.**
 
 **CI run `39441039376` (commit `46e6e4e`) built patch 0088 successfully**,
 6m58s. Artifact `xnu/out-0088/kernel.development.ugglite`, 16,816,2xx bytes,
@@ -77,20 +127,14 @@ not present in the source tree, so `-mcpu=cortex-a53` cannot re-codegen them;
 above. Options when it matters: patch those objects out for UGGLITE, or route
 the `os_log` ring through an LL/SC shim.
 
-**NEXT CONCRETE ACTION:** the kernel panics right after `arm_init`'s stage-2
-mark and the panic is invisible because the vector at `0xfffffe0007441000`
-is unmapped. Two ways forward, in order:
-1. **Add the early VBAR_EL1 reporter (task 4)** so the panic prints ESR/ELR/
-   FAR and its message on the panel instead of vanishing. It should install
-   before the MMU is touched and use non-cacheable stores.
-2. In QEMU first (cheap): break at `_DebuggerTrapWithState` and walk back, or
-   use `-d int` plus the `BRK` immediate to find the caller; the panic string
-   is in `__cstring`, so a QEMU memory scan for the message after the stop is
-   also viable.
-
-Only after the panic is understood: rebuild the temporary `fastboot boot`
-image and ask the user for the panel observation. **Do not claim the MMU fix
-works on hardware until that observation exists** - QEMU is not the phone.
+**SUPERSEDED NEXT ACTION (kept for the technique, not the conclusion).** At
+the time this section was written the next step looked like the early
+VBAR_EL1 reporter. The hardware run then showed the phone reaches stage 7
+(`entering arm_vm_init`) and hangs *there*, with no panic - so the immediate
+work is finer markers inside `arm_vm_init`, as described in the active
+section at the top. The reporter is still worth building afterwards, because
+`LowExceptionVectorBase` is still a table of `b .` stubs (see
+`start.s:238-275`) and any later fault will vanish the same way.
 
 ### >>> HISTORICAL: 0087 built and booted, panel observation pending <<<
 
