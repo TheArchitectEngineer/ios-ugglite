@@ -34,7 +34,7 @@
  	ctx->c.b64[0] = count;
  }
  
-+#if defined(SWEET_FAMILY)
++#if defined(UGG_FAMILY)
 +/*
 + * SWEET has no corecrypto kext (g_crypto_funcs stays NULL). SHA-1 uses
 + * BearSSL's portable implementation (libkern/crypto/sweet_sha1.c), with
@@ -106,20 +106,20 @@
 +++ b/libkern/crypto/sweet_sha1.c
 @@ -0,0 +1,4 @@
 +/* BearSSL sources are fetched at an immutable commit by 0020-stage-bearssl.sh. */
-+#if defined(SWEET_FAMILY)
++#if defined(UGG_FAMILY)
 +#include "sweet_bearssl/src/hash/sha1.c"
 +#endif
 --- /dev/null
 +++ b/libkern/crypto/sweet_dec32be.c
 @@ -0,0 +1,4 @@
 +/* BearSSL sources are fetched at an immutable commit by 0020-stage-bearssl.sh. */
-+#if defined(SWEET_FAMILY)
++#if defined(UGG_FAMILY)
 +#include "sweet_bearssl/src/codec/dec32be.c"
 +#endif
 --- /dev/null
 +++ b/libkern/crypto/sweet_enc32be.c
 @@ -0,0 +1,4 @@
 +/* BearSSL sources are fetched at an immutable commit by 0020-stage-bearssl.sh. */
-+#if defined(SWEET_FAMILY)
++#if defined(UGG_FAMILY)
 +#include "sweet_bearssl/src/codec/enc32be.c"
 +#endif

@@ -21,7 +21,7 @@
 + * No firmware/config upload or direct PMIC writes. Only IC data write:
   * zero to GT9896's event status after reading a report. See hw-report.md.
   */
- #if defined(SWEET_FAMILY)
+ #if defined(UGG_FAMILY)
 @@ -18,6 +18,7 @@
  extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
  /* Mach MIG declaration is not included by BSD's exported thread.h. */
@@ -115,7 +115,7 @@
 + * Sole XNU apps-DRV owner, called from thread context with deep idle disabled.
 + * No sleep/wake programming, SPMI writes, GIC handler, or timeout recovery.
 + */
-+#if defined(SWEET_FAMILY)
++#if defined(UGG_FAMILY)
 +#include <sys/param.h>
 +#include <sys/systm.h>
 +#include <sys/errno.h>
@@ -478,7 +478,7 @@
 + * Init is serialized by the single built-in SweetBattery personality.
 + * Battery APIDs are disjoint from the existing keys' 008/4c1 APIDs.
 + */
-+#if defined(SWEET_FAMILY)
++#if defined(UGG_FAMILY)
 +#include <sys/param.h>
 +#include <sys/systm.h>
 +#include <machine/machine_routines.h>
@@ -623,7 +623,7 @@
 + * SOC is an UNCALIBRATED estimate, not a replacement for the Linux QG algo.
 + * See report.md for binary evidence, register provenance and integration.
 + */
-+#if defined(SWEET_FAMILY)
++#if defined(UGG_FAMILY)
 +#include <device/device_types.h> /* io_buf_ptr_t for private OSKext headers */
 +#include <IOKit/IOLib.h>
 +#include <IOKit/IOWorkLoop.h>

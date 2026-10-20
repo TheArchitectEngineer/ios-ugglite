@@ -13,7 +13,16 @@
 #include "loader.h"
 
 #define BOOT_LINE_LENGTH	608
-#define PAGE_16K		0x4000UL
+/*
+ * Hardware page size for the boot_args placement. sweet is a 16K kernel;
+ * ugglite's Cortex-A53 has no 16K granule, so its kernel pages are 4K and
+ * boot_args/topOfKernelData must be aligned to that.
+ */
+#if defined(BOARD_UGGLITE)
+#define BOOT_PAGE		0x1000UL
+#else
+#define BOOT_PAGE		0x4000UL
+#endif
 
 struct payload_seg {
 	uint64_t vmaddr, vmsize, file_off, file_size;
@@ -81,8 +90,21 @@ const char *loader_boot(uintptr_t dtb)
 	uint64_t rd_start, rd_end;
 
 	if (!fdt_chosen_u64(dtb, "linux,initrd-start", &rd_start) ||
-	    !fdt_chosen_u64(dtb, "linux,initrd-end", &rd_end))
-		return "no initrd in /chosen";
+	    !fdt_chosen_u64(dtb, "linux,initrd-end", &rd_end)) {
+		/*
+		 * ugglite's lk does not report the ramdisk in /chosen and does
+		 * not place it at the header's ramdisk_addr (measured), so the
+		 * payload is appended to the kernel image instead and found
+		 * relative to the shim's own load address.
+		 */
+		extern uintptr_t sweet_payload_addr(void);
+		uintptr_t pa = sweet_payload_addr();
+
+		if (!pa)
+			return "no payload after shim";
+		rd_start = pa;
+		rd_end = pa + 0x2000000;	/* 32 MiB ceiling; size comes from the header */
+	}
 	con_hex2("INITRD", "lo=", rd_start, "hi=", rd_end);
 
 	const struct payload *p = (const struct payload *)rd_start;
@@ -112,10 +134,10 @@ const char *loader_boot(uintptr_t dtb)
 	/* ADT, then boot_args, behind the kernel; everything below topOfKernelData is ours. */
 	uintptr_t adt_pa = p->kernel_end + pa_of_va_base;
 	copy64(adt_pa, rd_start + p->adt_off, p->adt_size);
-	uintptr_t ba_pa = (adt_pa + p->adt_size + PAGE_16K - 1) & ~(PAGE_16K - 1);
-	uintptr_t top = ba_pa + PAGE_16K;
+	uintptr_t ba_pa = (adt_pa + p->adt_size + BOOT_PAGE - 1) & ~(BOOT_PAGE - 1);
+	uintptr_t top = ba_pa + BOOT_PAGE;
 
-	zero64(ba_pa, PAGE_16K);
+	zero64(ba_pa, BOOT_PAGE);
 	volatile struct boot_args *ba = (volatile struct boot_args *)ba_pa;
 	ba->Revision = 2;
 	ba->Version = 2;
@@ -144,4 +166,42 @@ const char *loader_boot(uintptr_t dtb)
 	__asm__ volatile("dsb sy; ic iallu; dsb sy; isb" ::: "memory");
 	((xnu_entry_t)entry_pa)(ba_pa);
 	return "xnu returned";
+}
+
+/*
+ * Where is the payload?
+ *
+ * On sweet, ABL reports linux,initrd-start/end in /chosen and loader_boot()
+ * uses that. ugglite's lk does not: its stock DTB's chosen node has only
+ * bootargs, and measurement showed the ramdisk is not placed at the boot image
+ * header's ramdisk_addr either (0x81000000 read back as unrelated data, and a
+ * 64 KiB test ramdisk was not found there either). lk does reliably load and
+ * decompress the KERNEL, so shim/build.sh appends the payload to the kernel
+ * image and the shim looks for it relative to its own load address.
+ *
+ * The image is linked at 0, so `&_end` is the offset of the byte just past
+ * the shim within the loaded image; the payload follows at a 16K boundary.
+ */
+uintptr_t
+sweet_payload_addr(void)
+{
+	extern char _end[];
+	/* Position independent: _end's address is base + its link-time offset. */
+	uintptr_t self_end = (uintptr_t)_end;
+	uintptr_t cand = (self_end + 0x3fff) & ~(uintptr_t)0x3fff;
+
+	/*
+	 * Check the version as well as the magic: the string "SWEETXNU" also
+	 * appears in this file (magic_ok's own comparison), so the magic alone
+	 * is not enough to identify a payload.
+	 */
+	for (int i = 0; i <= 8; i++) {
+		uintptr_t a = cand + (uintptr_t)i * 0x4000;
+		const struct payload *p = (const struct payload *)a;
+
+		if (magic_ok(p->magic) && p->version == 1 &&
+		    p->nsegs > 0 && p->nsegs < 64)
+			return a;
+	}
+	return 0;
 }

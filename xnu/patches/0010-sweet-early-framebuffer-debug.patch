@@ -90,16 +90,24 @@ diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 index ccbb188..777aca4 100644
 --- a/osfmk/arm64/start.s
 +++ b/osfmk/arm64/start.s
-@@ -463,6 +463,25 @@ LEXT(start_first_cpu)
+@@ -463,6 +463,33 @@ LEXT(start_first_cpu)
  	mov		x20, x0
  	mov		x21, #0
  
 +#if defined(SWEET)
 +	/* Stage 0: white 64x32 band, no stack or page tables needed. */
++#if defined(BOARD_UGGLITE)
++	MOV64	x0, (0x90000000 + 1200 * 2160)
++#else
 +	MOV64	x0, (0x9c000000 + 2368 * 4320)
++#endif
 +	mov		w1, #-1
 +	mov		x2, #32
++#if defined(BOARD_UGGLITE)
++	mov		x4, #2160
++#else
 +	mov		x4, #4320
++#endif
 +Lsweet_mark_row:
 +	mov		x3, #64
 +	mov		x5, x0
@@ -116,7 +124,7 @@ index ccbb188..777aca4 100644
  	// Set low reset vector before attempting any loads
  	adrp	x0, EXT(LowExceptionVectorBase)@page
  	add		x0, x0, EXT(LowExceptionVectorBase)@pageoff
-@@ -609,6 +628,23 @@ Lkernelcache_base_found:
+@@ -609,6 +628,27 @@ Lkernelcache_base_found:
  	lsr		x5,  x24, #(ARM_TT_L2_SHIFT)
  	create_bootstrap_mapping x14, x15, x5, x3, x2, x9, x10, x11, x12, x13
  
@@ -128,7 +136,11 @@ index ccbb188..777aca4 100644
 +	 * SWEET uses 16K pages and all bring-up RAM is below 4GB, so the first
 +	 * V=P L2 page is bootstrap_pagetables + 2*PGBYTES.
 +	 */
++#if defined(BOARD_UGGLITE)
++	MOV64	x10, 0x90000000
++#else
 +	MOV64	x10, 0x9c000000
++#endif
 +	MOV64	x11, (ARM_TTE_TYPE_BLOCK | ARM_TTE_VALID | ARM_TTE_BLOCK_SH(SH_OUTER_MEMORY) | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_WRITECOMB) | ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_PNX | ARM_TTE_BLOCK_NX)
 +	orr		x11, x11, x10
 +	and		x12, x10, #(ARM_TT_L2_INDEX_MASK)
@@ -145,9 +157,9 @@ new file mode 100644
 index 0000000..8f4c808
 --- /dev/null
 +++ b/osfmk/arm64/sweet_early.c
-@@ -0,0 +1,130 @@
+@@ -0,0 +1,149 @@
 +/*
-+ * Redmi Note 10 Pro bootstrap console. No allocation, locks, ADT parsing or
++ * Early bootstrap console. No allocation, locks, ADT parsing or
 + * per-CPU state: panic() can reach this before a current thread exists.
 + * start.s maps the splash framebuffer VA=PA as Normal Non-Cacheable memory.
 + * Stop using that mapping before arm_vm_init tears down bootstrap TTBR0.
@@ -158,15 +170,34 @@ index 0000000..8f4c808
 +#include <stdint.h>
 +#include <kern/misc_protos.h>
 +
-+#define EARLY_FB ((volatile uint32_t *)(uintptr_t)0x9c000000)
-+#define EARLY_WIDTH 1080u
-+#define EARLY_HEIGHT 2400u
-+#define EARLY_STRIDE (4320u / 4)
++#include <arm64/ugg_early_board.h>
++#define EARLY_FB ((volatile uint32_t *)(uintptr_t)UGG_EARLY_FB)
++#define EARLY_WIDTH UGG_EARLY_WIDTH
++#define EARLY_HEIGHT UGG_EARLY_HEIGHT
++#define EARLY_STRIDE (UGG_EARLY_STRIDE / 4)
 +#define EARLY_SCALE 2u
 +#define EARLY_CELL_W (8u * EARLY_SCALE)
 +#define EARLY_CELL_H (16u * EARLY_SCALE)
 +#define EARLY_ROWS ((EARLY_HEIGHT - 32u) / EARLY_CELL_H)
 +#define EARLY_COLS (EARLY_WIDTH / EARLY_CELL_W)
++
++/*
++ * Write one pixel. sweet's panel takes 32-bit words; ugglite's splash buffer
++ * is 24 bpp RGB888, where a 32-bit store would overwrite the neighbouring
++ * pixel and produce the diagonal noise seen on the phone.
++ */
++static inline void
++sweet_early_pixel(volatile uint32_t *line, unsigned int index, uint32_t c)
++{
++#if UGG_EARLY_BPP24
++	volatile uint8_t *p = (volatile uint8_t *)line + index * 3u;
++	p[0] = (uint8_t)(c >> 16);
++	p[1] = (uint8_t)(c >> 8);
++	p[2] = (uint8_t)c;
++#else
++	line[index] = c;
++#endif
++}
 +
 +extern unsigned char iso_font[256 * 16];
 +
@@ -180,7 +211,7 @@ index 0000000..8f4c808
 +	for (unsigned int y = 0; y < EARLY_CELL_H; y++) {
 +		volatile uint32_t *line = EARLY_FB + (early_row * EARLY_CELL_H + y) * EARLY_STRIDE;
 +		for (unsigned int x = 0; x < EARLY_WIDTH; x++) {
-+			line[x] = 0xff000000u;
++			sweet_early_pixel(line, x, 0xff000000u);
 +		}
 +	}
 +}
@@ -216,7 +247,7 @@ index 0000000..8f4c808
 +			for (unsigned int gx = 0; gx < 8; gx++) {
 +				uint32_t pixel = (glyph[gy] & (1u << gx)) ? 0xffffffffu : 0xff000000u;
 +				for (unsigned int sx = 0; sx < EARLY_SCALE; sx++) {
-+					line[gx * EARLY_SCALE + sx] = pixel;
++					sweet_early_pixel(line, gx * EARLY_SCALE + sx, pixel);
 +				}
 +			}
 +		}
@@ -241,7 +272,7 @@ index 0000000..8f4c808
 +	uint32_t color = 0xff00ff00u | (stage * 28u << 16);
 +	for (unsigned int y = EARLY_HEIGHT - 32; y < EARLY_HEIGHT; y++) {
 +		for (unsigned int x = stage * 64; x < (stage + 1) * 64; x++) {
-+			EARLY_FB[y * EARLY_STRIDE + x] = color;
++			sweet_early_pixel(EARLY_FB + y * EARLY_STRIDE, x, color);
 +		}
 +	}
 +	__asm__ volatile("dsb sy" ::: "memory");
@@ -330,7 +361,7 @@ index 0a00656..437adb1 100644
  #include <IOKit/IOBSD.h>
  
  #if !(MACH_KDP && CONFIG_KDP_INTERACTIVE_DEBUGGING)
-@@ -1069,6 +1072,11 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
+@@ -1069,8 +1072,13 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
  {
  #pragma clang diagnostic pop
  
@@ -342,3 +373,36 @@ index 0a00656..437adb1 100644
  #if defined(__x86_64__) && (DEVELOPMENT || DEBUG)
  	read_lbr();
  #endif
+ 
+ 	/* Turn off I/O tracing once we've panicked */
+diff --git a/osfmk/arm64/ugg_early_board.h b/osfmk/arm64/ugg_early_board.h
+new file mode 100644
+--- /dev/null
++++ b/osfmk/arm64/ugg_early_board.h
+@@ -0,0 +1,26 @@
++/*
++ * Early-console panel geometry, per board.
++ *
++ * sweet_early.c draws straight into the ABL splash buffer with the MMU off,
++ * so the address, size and pixel format must be exact for the board.
++ */
++#ifndef _ARM64_UGG_EARLY_BOARD_H_
++#define _ARM64_UGG_EARLY_BOARD_H_
++
++#if defined(BOARD_UGGLITE)
++/* Redmi Note 5A: 720x1280 RGB888 at 0x90000000, 2160-byte rows. */
++#define UGG_EARLY_FB      0x90000000UL
++#define UGG_EARLY_WIDTH   720u
++#define UGG_EARLY_HEIGHT  1280u
++#define UGG_EARLY_STRIDE  2160u
++#define UGG_EARLY_BPP24   1
++#else
++/* Redmi Note 10 Pro: 1080x2400 a8r8g8b8 at 0x9c000000, 4320-byte rows. */
++#define UGG_EARLY_FB      0x9c000000UL
++#define UGG_EARLY_WIDTH   1080u
++#define UGG_EARLY_HEIGHT  2400u
++#define UGG_EARLY_STRIDE  4320u
++#define UGG_EARLY_BPP24   0
++#endif
++
++#endif /* _ARM64_UGG_EARLY_BOARD_H_ */

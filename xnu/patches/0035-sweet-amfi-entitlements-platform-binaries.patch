@@ -4,7 +4,7 @@
  	bsd_init_kprintf("calling vfsinit\n");
  	vfsinit();
  
-+#if defined(SWEET_FAMILY)
++#if defined(UGG_FAMILY)
 +	/* AMFI's MAC policy is built in on SWEET (bsd/kern/sweet_amfi.c). */
 +	extern void sweet_amfi_policy_register(void);
 +	sweet_amfi_policy_register();

@@ -284,7 +284,7 @@ static void print_gic(void)
 
 /* ---- entry ---- */
 
-void probe_main(uint64_t dtb)
+void probe_main(uint64_t dtb, const char *loader_reason)
 {
 	uint64_t mmfr0 = rsr("id_aa64mmfr0_el1");
 	int has16 = gran16_supported(mmfr0);
@@ -296,6 +296,7 @@ void probe_main(uint64_t dtb)
 	 * cannot scroll off.
 	 */
 	con_str("PROBE", BOARD_NAME " board probe");
+	con_str("LOADER", loader_reason);   /* why the kernel was not booted */
 	con_str("16K GRANULE", has16 ? "SUPPORTED" : "NOT SUPPORTED");
 
 	/* Everything that cannot hang the CPU is printed before the AT tests. */

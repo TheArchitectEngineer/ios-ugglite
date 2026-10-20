@@ -47,7 +47,11 @@ UGG_GICD, UGG_GICD_SIZE = 0x0b000000, 0x1000
 UGG_GICC, UGG_GICC_SIZE = 0x0b002000, 0x1000
 UGG_VTIMER_INTID = 20              # PPI 4: secure-phys/phys/virt/hyp = 2/3/4/1
 UGG_FB, UGG_FB_SIZE = 0x90000000, 0x1400000
-UGG_FB_W, UGG_FB_H, UGG_FB_STRIDE = 720, 1280, 720 * 4
+# The ABL splash buffer the shim and XNU both draw into is 24 bpp RGB888 at
+# 0x90000000 (measured: the shim's 24 bpp byte stores render correctly, while
+# 32-bit stores produced diagonal noise). Keep the ADT's stride in step with
+# shim/board.h, which is what actually writes the panel.
+UGG_FB_W, UGG_FB_H, UGG_FB_STRIDE = 720, 1280, 720 * 3
 UGG_CANVAS_W, UGG_CANVAS_H = 750, 1334  # iPhone 8 (D20AP) points*2 fit 720x1280
 UGG_DISPLAY_SCALE = 2
 

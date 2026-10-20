@@ -52,7 +52,7 @@
  	__builtin_arm_isb(ISB_SY);
  #endif /* SWEET */
  }
-+#elif defined(SWEET_GIC_V2)
++#elif defined(UGG_GIC_V2)
 +/*
 + * GICv2 for Qualcomm SoCs without a redistributor (ugglite / MSM8917,
 + * "qcom,msm-qgic2"). Two MMIO frames: the distributor and a per-core CPU
@@ -247,7 +247,7 @@
  int uart_getc(void);
  
  void pe_init_fiq(void);
- #if defined(SWEET_FAMILY)
+ #if defined(UGG_FAMILY)
  extern uint32_t sweet_vtimer_intid;
 +/* GIC acknowledge / end-of-interrupt; GICv3 uses ICC_* system registers,
 + * GICv2 reads the CPU interface. Implemented in pexpert/arm/pe_fiq.c. */
@@ -263,13 +263,13 @@
  #endif  /* ARM64_BOARD_CONFIG_SWEET */
  
 +/*
-+ * SWEET_FAMILY marks the boards that share the SWEET driver code paths
++ * UGG_FAMILY marks the boards that share the ugglite driver code paths
 + * (sweet itself and ugglite). Most of the patch series guards its additions
-+ * with "defined(SWEET_FAMILY)" rather than testing for one board, so a new
++ * with "defined(UGG_FAMILY)" rather than testing for one board, so a new
 + * board only has to define this once.
 + */
 +#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_UGGLITE)
-+#define SWEET_FAMILY 1
++#define UGG_FAMILY 1
 +#endif
 +
 +#ifdef ARM64_BOARD_CONFIG_UGGLITE
@@ -313,7 +313,7 @@
  MACHINE_FLAGS_ARM64_VMAPPLE = -DARM64_BOARD_CONFIG_VMAPPLE              -march=armv8.5a
  MACHINE_FLAGS_ARM64_BCM2837 = -DARM64_BOARD_CONFIG_BCM2837
  MACHINE_FLAGS_ARM64_SWEET = -DARM64_BOARD_CONFIG_SWEET                -march=armv8.2-a+crypto
-+MACHINE_FLAGS_ARM64_UGGLITE = -DARM64_BOARD_CONFIG_UGGLITE -DSWEET_FAMILY -march=armv8-a
++MACHINE_FLAGS_ARM64_UGGLITE = -DARM64_BOARD_CONFIG_UGGLITE -DUGG_FAMILY -march=armv8-a
  
  
  #
@@ -352,7 +352,7 @@
 +
 +#define UGGLITE                   1
 +#define SWEET                     1     /* shares the SWEET driver code paths */
-+#define SWEET_GIC_V2              1     /* selects the GICv2 implementation */
++#define UGG_GIC_V2              1     /* selects the GICv2 implementation */
 +
 +/*
 + * Four homogeneous A53s. SWEET's own limit is 6 (six A55s) and lives in

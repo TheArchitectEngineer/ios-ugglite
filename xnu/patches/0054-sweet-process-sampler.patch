@@ -88,7 +88,7 @@
 --- a/iokit/Kernel/IOUserClient.cpp
 +++ b/iokit/Kernel/IOUserClient.cpp
 @@ -2603,7 +2603,7 @@
- #if defined(SWEET_FAMILY)
+ #if defined(UGG_FAMILY)
  /*
   * SWEET IOKit trace: registry and matching calls made by the processes
 - * named in boot-arg sweetiolog (comma separated, default "backboardd";

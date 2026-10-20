@@ -73,7 +73,7 @@ diff --git a/pexpert/pexpert/arm/protos.h b/pexpert/pexpert/arm/protos.h
  int uart_getc(void);
  
  void pe_init_fiq(void);
-+#if defined(SWEET_FAMILY)
++#if defined(UGG_FAMILY)
 +extern uint32_t sweet_vtimer_intid;
 +#endif
  

@@ -5,7 +5,7 @@ diff --git a/iokit/Kernel/IOService.cpp b/iokit/Kernel/IOService.cpp
  	bool                wasHiding;
  
  	iomediaClass = OSMetaClass::getMetaClassWithName(gIOMediaKey);
-+#if !defined(SWEET_FAMILY)
++#if !defined(UGG_FAMILY)
  	assert(iomediaClass);
 +#endif
  
@@ -15,7 +15,7 @@ diff --git a/iokit/Kernel/IOService.cpp b/iokit/Kernel/IOService.cpp
  	}
  	UNLOCKNOTIFY();
  
-+#if defined(SWEET_FAMILY)
++#if defined(UGG_FAMILY)
 +	/* SWEET has no IOStorageFamily: without the IOMedia class no media exists to unhide. */
 +	if (!iomediaClass) {
 +		wasHiding = false;

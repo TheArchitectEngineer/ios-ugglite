@@ -123,6 +123,22 @@ else
 	#                         or hangs (both seen on ugglite 2026-10-20)
 	#   - DTB after image  -> same, the DTB is not where lk looks
 	# gzip -n: no timestamp/filename, so builds are reproducible.
+	#
+	# The payload cannot ride in the ramdisk: measurement on ugglite showed
+	# lk does not place it at ramdisk_addr (0x81000000 reads back unrelated
+	# data, and a 64 KiB test ramdisk was not found there either). lk DOES
+	# decompress the kernel, and the decompressed image is placed
+	# contiguously in RAM, so the payload is appended to the uncompressed
+	# Image before gzip - the shim then finds it right after its own _end.
+	if [ -n "$PAYLOAD" ]; then
+		cp "$PAYLOAD" out/payload-appended.bin
+		# Pad to a 16 KiB boundary so the shim's _end-relative search lands
+		# on the magic.
+		cur=$(stat -c%s out/Image)
+		pad=$(( (16384 - (cur % 16384)) % 16384 ))
+		head -c "$pad" /dev/zero >> out/Image
+		cat out/payload-appended.bin >> out/Image
+	fi
 	gzip -9 -n -c out/Image > out/kernel.gz
 	cp out/kernel.gz out/kernel-dtb
 	cat "$DTB" >> out/kernel-dtb

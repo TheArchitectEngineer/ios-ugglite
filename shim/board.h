@@ -90,6 +90,16 @@
 #define PTIMER_INTID	19
 #define SGI_INTID	1
 
+/*
+ * Where lk puts the ramdisk. The boot image header asks for 0x81000000
+ * (ramdisk_offset 0x1000000 from base 0x80000000), and unlike sweet's
+ * bootloader, ugglite's lk does not add linux,initrd-start/end to /chosen -
+ * the stock DTB's chosen node has only bootargs. The payload magic is
+ * checked before the address is trusted.
+ */
+#define RAMDISK_PA	0x81000000UL
+#define RAMDISK_MAX	0x1000000UL	/* 16 MiB scan window */
+
 /* restart@4ab000 (qcom,pshold) and msm-imem restart_reason@65c. */
 #define PSHOLD_PHYS		0x004ab000UL
 #define IMEM_RESTART_REASON	0x0860065cUL

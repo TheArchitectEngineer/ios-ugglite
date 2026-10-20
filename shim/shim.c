@@ -434,11 +434,14 @@ void shim_main(uint64_t dtb)
 	 * falls through to the probe.
 	 */
 	if (why[0] == 'n' || why[0] == 'b') {
-		extern void probe_main(uint64_t dtb);
-		probe_main(dtb);
+		extern void probe_main(uint64_t dtb, const char *reason);
+		probe_main(dtb, why);
 		con_skip();
-		con_str("PROBE", "results stay 3 min");
-		delay_ms(180000);
+		/* Stay up until the user holds Power: a reboot mid-read loses
+		 * the result, which has cost several cycles. */
+		con_str("PROBE", "hold POWER to reboot");
+		for (;;)
+			__asm__ volatile("wfe");
 	}
 	reset(20);
 #else

@@ -4,7 +4,7 @@
  	return 0;
  }
  
-+#if defined(SWEET_FAMILY)
++#if defined(UGG_FAMILY)
 +/*
 + * SWEET: daemons started by launchd write stdout/stderr to /dev/null, and
 + * pointing a launchd job at /dev/console stops it from launching at all
@@ -49,7 +49,7 @@
  			if (rw == UIO_READ) {
  				return 0;
  			}
-+#if defined(SWEET_FAMILY)
++#if defined(UGG_FAMILY)
 +			{
 +				char name[32];
 +				if (sweet_null_tee(name, sizeof(name))) {

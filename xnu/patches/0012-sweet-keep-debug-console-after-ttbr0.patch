@@ -11,12 +11,12 @@ diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
 + * Use the otherwise empty 32MB block above low globals and below gVirtBase
 + * for a Normal-NC framebuffer alias that survives bootstrap TTBR0 teardown.
 + */
-+#define SWEET_EARLY_FB_VA (VM_MIN_KERNEL_ADDRESS + ARM_TT_L2_SIZE)
++#define UGG_EARLY_FB_VA (VM_MIN_KERNEL_ADDRESS + ARM_TT_L2_SIZE)
 +
 +static void
 +sweet_early_map_final(void)
 +{
-+	const vm_map_address_t va = SWEET_EARLY_FB_VA;
++	const vm_map_address_t va = UGG_EARLY_FB_VA;
 +	assert(va + ARM_TT_L2_SIZE <= gVirtBase);
 +	tt_entry_t l1 = cpu_tte[(va & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT];
 +	assert((l1 & (ARM_TTE_VALID | ARM_TTE_TYPE_MASK)) == (ARM_TTE_VALID | ARM_TTE_TYPE_TABLE));
@@ -51,7 +51,7 @@ diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
 -	sweet_early_disable();
 +#if defined(SWEET)
 +	/* The final TTBR1 is live; leave the outgoing VA=PA framebuffer alias. */
-+	sweet_early_relocate(SWEET_EARLY_FB_VA);
++	sweet_early_relocate(UGG_EARLY_FB_VA);
 +#endif
  	set_mmu_ttb(invalid_ttep & TTBR_BADDR_MASK);
  
@@ -87,7 +87,7 @@ diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
 --- a/osfmk/arm64/sweet_early.c
 +++ b/osfmk/arm64/sweet_early.c
 @@ -2,7 +2,8 @@
-  * Redmi Note 10 Pro bootstrap console. No allocation, locks, ADT parsing or
+  * Early bootstrap console. No allocation, locks, ADT parsing or
   * per-CPU state: panic() can reach this before a current thread exists.
   * start.s maps the splash framebuffer VA=PA as Normal Non-Cacheable memory.
 - * Stop using that mapping before arm_vm_init tears down bootstrap TTBR0.
@@ -96,16 +96,16 @@ diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
   */
  #include <arm64/sweet_early.h>
  
-@@ -10,7 +11,8 @@
- #include <stdint.h>
+@@ -9,7 +9,8 @@
  #include <kern/misc_protos.h>
  
--#define EARLY_FB ((volatile uint32_t *)(uintptr_t)0x9c000000)
-+static volatile uint32_t *early_fb = (volatile uint32_t *)(uintptr_t)0x9c000000;
+ #include <arm64/ugg_early_board.h>
+-#define EARLY_FB ((volatile uint32_t *)(uintptr_t)UGG_EARLY_FB)
++static volatile uint32_t *early_fb = (volatile uint32_t *)(uintptr_t)UGG_EARLY_FB;
 +#define EARLY_FB early_fb
- #define EARLY_WIDTH 1080u
- #define EARLY_HEIGHT 2400u
- #define EARLY_STRIDE (4320u / 4)
+ #define EARLY_WIDTH UGG_EARLY_WIDTH
+ #define EARLY_HEIGHT UGG_EARLY_HEIGHT
+ #define EARLY_STRIDE (UGG_EARLY_STRIDE / 4)
 @@ -87,18 +89,21 @@
  void
  sweet_early_mark(unsigned int stage, const char *label)
@@ -119,7 +119,7 @@ diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
  	for (unsigned int y = EARLY_HEIGHT - 32; y < EARLY_HEIGHT; y++) {
 -		for (unsigned int x = stage * 64; x < (stage + 1) * 64; x++) {
 +		for (unsigned int x = stage * 48; x < (stage + 1) * 48; x++) {
- 			EARLY_FB[y * EARLY_STRIDE + x] = color;
+ 			sweet_early_pixel(EARLY_FB + y * EARLY_STRIDE, x, color);
  		}
  	}
  	__asm__ volatile("dsb sy" ::: "memory");

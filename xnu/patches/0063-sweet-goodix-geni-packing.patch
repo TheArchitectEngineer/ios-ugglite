@@ -7,7 +7,7 @@
 - * zero to GT9896's event status after reading a report. See hw-report.md.
 + * zero to GT9896's event status after reading a report. See touch2/report.md.
   */
- #if defined(SWEET_FAMILY)
+ #if defined(UGG_FAMILY)
  #include <sys/param.h>
 @@ -32,6 +32,11 @@
  #define TOUCH_MAX        10u

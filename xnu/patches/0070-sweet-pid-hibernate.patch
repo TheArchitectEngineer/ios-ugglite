@@ -5,7 +5,7 @@
  433	AUE_NULL	ALL	{ int pid_suspend(int pid); }
  434	AUE_NULL	ALL	{ int pid_resume(int pid); }
 -#if CONFIG_EMBEDDED
-+#if CONFIG_EMBEDDED || defined(SWEET_FAMILY)
++#if CONFIG_EMBEDDED || defined(UGG_FAMILY)
  435	AUE_NULL	ALL	{ int pid_hibernate(int pid); }
  #else
  435     AUE_NULL        ALL     { int nosys(void); }
@@ -16,7 +16,7 @@
  }
  
 -#if !XNU_TARGET_OS_OSX
-+#if !XNU_TARGET_OS_OSX || defined(SWEET_FAMILY)
++#if !XNU_TARGET_OS_OSX || defined(UGG_FAMILY)
 +/*
 + * SWEET runs the iOS userland on the macOS config: SpringBoard calls
 + * pid_hibernate when an app leaves the foreground, and nosys (SIGSYS)

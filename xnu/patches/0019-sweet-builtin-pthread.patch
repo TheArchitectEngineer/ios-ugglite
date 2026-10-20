@@ -37,7 +37,7 @@ diff --git a/bsd/sys/pthread_internal.h b/bsd/sys/pthread_internal.h
  
  struct ksyn_waitq_element {
  #if __LP64__
-+	#if defined(SWEET_FAMILY)
++	#if defined(UGG_FAMILY)
 +	/* libpthread-514.100.2 includes the trailing kwe_uth pointer. */
 +	char opaque[56];
 +#else
@@ -82,7 +82,7 @@ new file mode 100644
 +++ b/bsd/pthread/sweet_pthread_init.c
 @@ -0,0 +1,26 @@
 +/* Built-in provider: Apple libpthread-514.100.2, paired with xnu-8796.141.3. */
-+#if defined(SWEET_FAMILY)
++#if defined(UGG_FAMILY)
 +#include "sweet_pthread_compat.h"
 +#include "sweet_libpthread/kern/kern_init.c"
 +
@@ -113,7 +113,7 @@ new file mode 100644
 +++ b/bsd/pthread/sweet_pthread_support.c
 @@ -0,0 +1,5 @@
 +/* Built-in provider: Apple libpthread-514.100.2, paired with xnu-8796.141.3. */
-+#if defined(SWEET_FAMILY)
++#if defined(UGG_FAMILY)
 +#include "sweet_pthread_compat.h"
 +#include "sweet_libpthread/kern/kern_support.c"
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
@@ -123,7 +123,7 @@ new file mode 100644
 +++ b/bsd/pthread/sweet_pthread_synch.c
 @@ -0,0 +1,5 @@
 +/* Built-in provider: Apple libpthread-514.100.2, paired with xnu-8796.141.3. */
-+#if defined(SWEET_FAMILY)
++#if defined(UGG_FAMILY)
 +#include "sweet_pthread_compat.h"
 +#include "sweet_libpthread/kern/kern_synch.c"
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
