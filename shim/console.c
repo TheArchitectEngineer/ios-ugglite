@@ -1,27 +1,48 @@
 /*
  * Minimal text console on the ABL splash framebuffer. With the MMU off
  * every access is Device memory, so stay aligned (-mstrict-align).
+ *
+ * The panel format differs per board: sweet leaves a 32 bpp a8r8g8b8 splash
+ * at 0x9c000000, ugglite a 24 bpp RGB888 one at 0x90001000. Pixel writes go
+ * through con_put() so the 24 bpp path only touches three aligned bytes.
  */
 #include "console.h"
 #include "font.h"
 
-#define SCALE		3
+#define SCALE		FB_SCALE
 #define CH_W		(8 * SCALE)
 #define CH_H		(16 * SCALE)
 #define MARGIN		24
 #define LABEL_COLS	8
 
-volatile uint32_t *con_fb = (volatile uint32_t *)FB_BASE;
+volatile uint32_t *con_fb = (volatile uint32_t *)FB_PHYS;
 static uint32_t con_bg;
 static int row;
 
+/*
+ * Write one pixel. The framebuffer is Device memory and we run with the MMU
+ * off, so only naturally aligned accesses are used: for 24 bpp that is the
+ * three bytes at fb + y*stride + x*3 (byte stores, always aligned to 1).
+ */
+static inline void con_put(int x, int y, uint32_t c)
+{
+	volatile uint8_t *p = (volatile uint8_t *)con_fb + (uintptr_t)y * FB_STRIDE + x * FB_BPP;
+
+#if FB_BPP == 4
+	*(volatile uint32_t *)p = c;
+#else
+	/* 0xRRGGBB in the low 24 bits; r8g8b8 means byte order R,G,B. */
+	p[0] = (uint8_t)(c >> 16);
+	p[1] = (uint8_t)(c >> 8);
+	p[2] = (uint8_t)c;
+#endif
+}
+
 void con_clear(uint32_t bg)
 {
-	for (int y = 0; y < FB_H; y++) {
-		volatile uint32_t *line = con_fb + y * (FB_STRIDE / 4);
+	for (int y = 0; y < FB_H; y++)
 		for (int x = 0; x < FB_W; x++)
-			line[x] = bg;
-	}
+			con_put(x, y, bg);
 	con_bg = bg;
 	row = 0;
 }
@@ -37,12 +58,9 @@ static void put_char(int col, char ch, uint32_t fg)
 	for (int gy = 0; gy < 16; gy++)
 		for (int gx = 0; gx < 8; gx++) {
 			uint32_t c = (g[gy] & (0x80 >> gx)) ? fg : con_bg;
-			for (int sy = 0; sy < SCALE; sy++) {
-				volatile uint32_t *p = con_fb + (y0 + gy * SCALE + sy) * (FB_STRIDE / 4)
-						       + x0 + gx * SCALE;
+			for (int sy = 0; sy < SCALE; sy++)
 				for (int sx = 0; sx < SCALE; sx++)
-					p[sx] = c;
-			}
+					con_put(x0 + gx * SCALE + sx, y0 + gy * SCALE + sy, c);
 		}
 }
 

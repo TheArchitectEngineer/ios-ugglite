@@ -97,14 +97,28 @@ ipsw img4 im4p extract research/ipsw-x/dt/Firmware/all_flash/DeviceTree.d22ap.im
 
 ### 3. Build the boot image
 
-Needs `aarch64-linux-gnu-gcc` and `mkbootimg`.
+Needs `aarch64-linux-gnu-gcc` (or clang, which the build script falls back to)
+and `mkbootimg`.
 
 ```sh
 python3 tools/mkadt.py shim/out/sweet.adt --highmem
 python3 tools/mkpayload.py xnu/out/kernel.development.sweet shim/out/sweet.adt shim/out/payload.bin \
     --cmdline 'debug=0xc serial=3 cpus=6 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweetfb_noconsole=1 sweetfb_hz=30'
-shim/build.sh ../shim/out/payload.bin      # -> shim/out/shim-boot.img
+shim/build.sh ../shim/out/payload.bin      # -> shim/out/shim-boot-sweet.img
 ```
+
+The shim is board-selectable; the second argument picks the board (default
+`sweet`). The build is the same, only `shim/board.h` constants and the DTB
+change:
+
+```sh
+shim/build.sh '' ugglite                    # -> shim/out/shim-boot-ugglite.img
+```
+
+With no payload the shim runs diagnostics instead: on sweet it probes the UFS,
+on ugglite it runs `shim/probe.c`, which reports the CPU's page-size support,
+the live memory map, the interrupt controller and the timer PPIs. See
+`NOTES.md` for the state of the ugglite port.
 
 What the less obvious boot-args do:
 
@@ -146,7 +160,7 @@ The log contains crash reports with backtraces (`CRASH name ...`), IOKit traces 
 
 | Path | What |
 | --- | --- |
-| `shim/` | Bare-metal boot shim (C + asm) packed as an Android boot.img v2 |
+| `shim/` | Bare-metal boot shim (C + asm) packed as an Android boot.img v2. `shim/board.h` selects the target board; `shim/probe.c` characterises an unknown one |
 | `xnu/patches/` | The XNU patch series (applied in order by CI), plus staging scripts for libpthread, HFS and BearSSL |
 | `.github/workflows/xnu.yml` | Kernel CI build |
 | `tools/mkadt.py` | Generates the Apple Device Tree from sweet's MMIO layout and the iPhone X identity |

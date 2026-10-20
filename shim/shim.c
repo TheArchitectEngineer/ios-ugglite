@@ -11,12 +11,16 @@
 #include "mmu.h"
 #include "loader.h"
 #include "ufs.h"
+#include "board.h"
 
-#define IMEM_RESTART_REASON	0x146aa65cUL	/* qcom,msm-imem restart_reason@65c */
 #define RESTART_BOOTLOADER	0x77665500U
-#define PSHOLD			0x0c264000UL
 
-#define GICD_BASE		0x17a00000UL
+/*
+ * The shim's own bring-up tests below are GICv3-specific (redistributors,
+ * ICC_* system registers). A GICv2 board only gets the loader and the probe;
+ * the GIC is characterised by shim/probe.c instead.
+ */
+#if !GIC_IS_V2
 #define GICR_BASE		0x17a60000UL
 #define GICR_SIZE		0x100000UL
 #define GICR_PE_SIZE		0x20000UL
@@ -30,9 +34,7 @@
 #define GICR_ISPENDR0		(GICR_SGI + 0x200)
 #define GICR_ISACTIVER0		(GICR_SGI + 0x300)
 #define GICR_ICFGR1		(GICR_SGI + 0xc04)
-#define VTIMER_INTID		19	/* DT: <GIC_PPI 3 ...>, not the usual 27 */
-#define PTIMER_INTID		18	/* DT: <GIC_PPI 2 ...> */
-#define SGI_INTID		1
+#endif
 
 #define PSCI_VERSION		0x84000000UL
 #define PSCI_CPU_SUSPEND	0xc4000001UL
@@ -52,19 +54,22 @@
 #define isb() __asm__ volatile("isb" ::: "memory")
 
 static inline uint32_t rd32(uintptr_t a) { return *(volatile uint32_t *)a; }
-static inline uint64_t rd64(uintptr_t a) { return *(volatile uint64_t *)a; }
+static inline uint64_t __attribute__((unused)) rd64(uintptr_t a) { return *(volatile uint64_t *)a; }
 static inline void wr32(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
-static inline void wr8(uintptr_t a, uint8_t v) { *(volatile uint8_t *)a = v; }
+static inline void __attribute__((unused)) wr8(uintptr_t a, uint8_t v) { *(volatile uint8_t *)a = v; }
 
 extern char secondary_entry[];
 
 static const char *stage;	/* set at runtime: no absolute pointers in data */
 static volatile uint64_t sec_mpidr[NR_CPUS];
+#if !GIC_IS_V2
 static volatile uint64_t sec_probe[4];	/* CPU1 redistributor write test */
+#endif
 static volatile uint32_t irq_count, irq_other, irq_last;
 static volatile int irq_src;
 
-/* ICC_SGI1R_EL1 value targeting the calling core only. */
+/* ICC_SGI1R_EL1 value targeting the calling core only (v3 only). */
+#if !GIC_IS_V2
 static uint64_t sgi_self(unsigned id)
 {
 	uint64_t m = rsr("mpidr_el1");
@@ -73,6 +78,7 @@ static uint64_t sgi_self(unsigned id)
 	       (uint64_t)id << 24 |
 	       (1U << (m & 0xf));		/* target list: Aff0 */
 }
+#endif
 
 static uint64_t smc(uint64_t fn, uint64_t a1, uint64_t a2, uint64_t a3)
 {
@@ -109,7 +115,7 @@ static void __attribute__((noreturn)) reset(unsigned after_s)
 	wr32(IMEM_RESTART_REASON, RESTART_BOOTLOADER);
 	__asm__ volatile("dsb sy" ::: "memory");
 	smc(PSCI_SYSTEM_RESET, 0, 0, 0);
-	wr32(PSHOLD, 0);
+	wr32(PSHOLD_PHYS, 0);
 	for (;;)
 		__asm__ volatile("wfe");
 }
@@ -143,11 +149,26 @@ void exc_handler(uint64_t slot, uint64_t *regs)
 		return;
 	}
 	con_clear(BLUE);
+	/*
+	 * One literal per call, and -fno-jump-tables in build.sh: clang
+	 * otherwise lowers this into a table of string addresses in .rodata
+	 * (ldr x1, [table, kind, lsl #3]), which needs an absolute relocation.
+	 * The image runs wherever ABL puts it, so it must stay position
+	 * independent.
+	 */
 	switch (slot & 3) {
-	case 0: con_str("PANIC", "SYNC"); break;
-	case 1: con_str("PANIC", "IRQ"); break;
-	case 2: con_str("PANIC", "FIQ"); break;
-	default: con_str("PANIC", "SERROR"); break;
+	case 0:
+		con_str("PANIC", "SYNC");
+		break;
+	case 1:
+		con_str("PANIC", "IRQ");
+		break;
+	case 2:
+		con_str("PANIC", "FIQ");
+		break;
+	default:
+		con_str("PANIC", "SERROR");
+		break;
 	}
 	con_hex2("SLOT", "n=", slot, "cpu=", rsr("mpidr_el1"));
 	con_str("STAGE", stage);
@@ -163,11 +184,20 @@ void exc_handler(uint64_t slot, uint64_t *regs)
 
 /* ---- SMP ---- */
 
+#if !GIC_IS_V2
 static uintptr_t find_gicr(void);
+#endif
 
+/*
+ * PSCI CPU_ON target (start.S). On v3 boards it records MPIDRs and probes the
+ * redistributor; on v2 boards there is no redistributor, so it only records
+ * the MPIDR and powers off again. The symbol must exist on every board
+ * because start.S always references it.
+ */
 void secondary_main(uint64_t idx)
 {
 	sec_mpidr[idx] = rsr("mpidr_el1") | (1ULL << 63);
+#if !GIC_IS_V2
 	if (idx == 1) {
 		uintptr_t r = find_gicr();
 		if (r) {
@@ -179,10 +209,12 @@ void secondary_main(uint64_t idx)
 		}
 		sec_probe[3] = r ? 1 : 0xdead;
 	}
+#endif
 	__asm__ volatile("dsb sy" ::: "memory");
 	smc(PSCI_CPU_OFF, 0, 0, 0);
 }
 
+#if !GIC_IS_V2
 static void __attribute__((unused)) test_smp(void)
 {
 	stage = "smp";
@@ -202,9 +234,11 @@ static void __attribute__((unused)) test_smp(void)
 				 (uint32_t)sec_mpidr[i] | (sec_mpidr[i] ? 0 : 0xdead0000));
 	}
 }
+#endif /* !GIC_IS_V2 */
 
 /* ---- GIC + timer ---- */
 
+#if !GIC_IS_V2
 static uintptr_t find_gicr(void)
 {
 	uint64_t aff = rsr("mpidr_el1");
@@ -339,6 +373,7 @@ static void test_gic(void)
 	wr32(r + GICR_ICENABLER0, 0xffffffff);
 	isb();
 }
+#endif /* !GIC_IS_V2 */
 
 /* ---- main ---- */
 
@@ -377,12 +412,33 @@ void shim_main(uint64_t dtb)
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
 	stage = "loader";
 	con_clear(RED);
+#if defined(BOARD_UGGLITE)
+	con_str("SHIM", "ugglite loader + board probe");
+#else
 	con_str("SHIM", "sweet milestone 4: xnu loader");
+#endif
 	con_skip();
 	const char *why = loader_boot(dtb);
 	con_str("LOADER", why);
 	con_skip();
 
+#if defined(BOARD_UGGLITE)
+	/*
+	 * ugglite bring-up: no payload means "characterise this board". The
+	 * probe answers the granule question and dumps the live memory map, so
+	 * it is the first thing to run on the phone. A ramdisk without a
+	 * payload is the normal case here, so any of the loader's "nothing to
+	 * boot" answers falls through to the probe.
+	 */
+	if (why[0] == 'n' || why[0] == 'b') {
+		extern void probe_main(uint64_t dtb);
+		probe_main(dtb);
+		con_skip();
+		con_str("PROBE", "results stay 3 min");
+		delay_ms(180000);
+	}
+	reset(20);
+#else
 	/* No payload: probe the internal UFS while the MMU is still off. */
 	stage = "ufs";
 	test_ufs();
@@ -391,7 +447,7 @@ void shim_main(uint64_t dtb)
 	con_str("UFS", "probe done, reset in ~3 min");
 	delay_ms(180000);
 	reset(20);
-
+#endif
 	stage = "fill off";
 	uint64_t fill_off = ticks_fill(RED);
 	uint64_t mem_off = ticks_mem();
@@ -428,7 +484,12 @@ void shim_main(uint64_t dtb)
 	stage = "psci";
 	con_hex2("PSCI", "ver=", smc(PSCI_VERSION, 0, 0, 0), "smccc=", smc(SMCCC_VERSION, 0, 0, 0));
 	con_skip();
+#if !GIC_IS_V2
 	test_gic();
+#else
+	/* The v2 GIC is characterised by probe.c, not by the v3 tests. */
+	con_str("GIC", "v2 board: see board probe");
+#endif
 
 	stage = "done";
 	reset(40);

@@ -1,24 +1,41 @@
 /*
- * Milestone 3: EL1 stage-1 MMU with the 16K granule XNU uses.
+ * EL1 stage-1 MMU bring-up for the shim, using the granule the board's CPU
+ * actually implements.
  *
- * T0SZ=28 gives a 36-bit VA whose walk starts at level 2: one 16K table of
- * 2048 x 32MB blocks covers 64GB, identity mapped (VA == PA).
+ * sweet (SM7150) has the 16K granule, which is what XNU is built for there:
+ * T0SZ=28 gives a 36-bit VA whose walk starts at level 2, and one 16K table
+ * of 2048 x 32MB blocks covers 64GB.
+ *
+ * ugglite (MSM8917, Cortex-A53) has only 4K and 64K, so the 4K layout is
+ * used instead: T0SZ=28 starts the walk at level 1 with 1GB blocks, and one
+ * 4K table of 512 entries covers 512GB.
  *
  * Qualcomm XPUs fault on speculative reads of protected carve-outs (TZ,
  * hyp, modem...), so nothing is mapped cacheable except our own image:
  *   - default: Device-nGnRnE, execute-never (same as MMU off)
- *   - the 32MB block(s) holding the image get an L3 table: image pages are
+ *   - the block(s) holding the image get an L3 table: image pages are
  *     Normal write-back, the rest of the block stays Device
  *   - the splash framebuffer block is Normal non-cacheable (write-combining)
  */
 #include <stdint.h>
 #include "mmu.h"
 
+#if defined(BOARD_UGGLITE)
+#define PG_SHIFT	12
+#define NENT		512		/* 4K table = 512 x 8 bytes */
+#define BLK_SHIFT	30		/* 1GB level-1 block */
+#define TCR_TG0		(0UL << 14)	/* 4K */
+#define MMU_COVER	(512UL << 30)	/* one L1 table covers 512GB */
+#else
 #define PG_SHIFT	14
-#define PG_SIZE		(1UL << PG_SHIFT)		/* 16K */
-#define BLK_SHIFT	25
-#define BLK_SIZE	(1UL << BLK_SHIFT)		/* 32MB level-2 block */
-#define NENT		2048
+#define NENT		2048		/* 16K table = 2048 x 8 bytes */
+#define BLK_SHIFT	25		/* 32MB level-2 block */
+#define TCR_TG0		(2UL << 14)	/* 16K */
+#define MMU_COVER	(64UL << 30)	/* one L2 table covers 64GB */
+#endif
+
+#define PG_SIZE		(1UL << PG_SHIFT)
+#define BLK_SIZE	(1UL << BLK_SHIFT)
 
 #define ATTR_DEV	0	/* MAIR attr0 = 0x00 Device-nGnRnE */
 #define ATTR_WB		1	/* MAIR attr1 = 0xff Normal WB RW-alloc */
@@ -39,9 +56,9 @@
 #define WB_FLAGS	(D_ATTR(ATTR_WB) | D_SH_INNER | D_AF | D_UXN)
 #define NC_FLAGS	(D_ATTR(ATTR_NC) | D_SH_OUTER | D_AF | D_PXN | D_UXN)
 
-/* TCR: T0SZ=28, IRGN0/ORGN0=WBWA, SH0=inner, TG0=16K, EPD1, TG1=16K, IPS=36 bit */
-#define TCR_VAL		(28UL | (1UL << 8) | (1UL << 10) | (3UL << 12) | (2UL << 14) | \
-			 (28UL << 16) | (1UL << 23) | (1UL << 30) | (1UL << 32))
+/* TCR: T0SZ=28, IRGN0/ORGN0=WBWA, SH0=inner, TG0=board, EPD1, IPS=40 bit */
+#define TCR_VAL		(28UL | (1UL << 8) | (1UL << 10) | (3UL << 12) | TCR_TG0 | \
+				 (1UL << 23) | (2UL << 30) | (2UL << 32))
 
 #define SCTLR_M		(1UL << 0)
 #define SCTLR_A		(1UL << 1)
@@ -54,7 +71,7 @@
 
 extern char _head[], _end[];
 
-/* 1 L2 + up to 2 L3 tables, plus slack to align to 16K at runtime */
+/* 1 top-level table + up to 2 L3 tables, plus slack to align at runtime. */
 static uint64_t pt_pool[4 * NENT] __attribute__((aligned(4096)));
 
 static void dcache_inval_range(uintptr_t start, uintptr_t end)
@@ -77,7 +94,7 @@ int mmu_enable(struct mmu_info *info)
 	uintptr_t img_lo = (uintptr_t)_head & ~(PG_SIZE - 1);
 	uintptr_t img_hi = ((uintptr_t)_end + PG_SIZE - 1) & ~(PG_SIZE - 1);
 	uintptr_t pool = ((uintptr_t)pt_pool + PG_SIZE - 1) & ~(PG_SIZE - 1);
-	uint64_t *l2 = (uint64_t *)pool;
+	uint64_t *top = (uint64_t *)pool;
 	int n_l3 = 0;
 
 	info->img_lo = img_lo;
@@ -86,13 +103,13 @@ int mmu_enable(struct mmu_info *info)
 	if (((img_hi - 1) >> BLK_SHIFT) - (img_lo >> BLK_SHIFT) > 1)
 		return -1;	/* only room for two L3 tables */
 
-	/* L2: Device everywhere RAM or MMIO can be (first 8GB), rest unmapped */
-	zero_table(l2);
-	for (uint64_t i = 0; i < (8UL << 30) >> BLK_SHIFT; i++)
-		l2[i] = (i << BLK_SHIFT) | DEV_FLAGS | D_BLOCK;
-	l2[FB_PHYS >> BLK_SHIFT] = (FB_PHYS & ~(BLK_SIZE - 1)) | NC_FLAGS | D_BLOCK;
+	/* Top level: Device everywhere RAM or MMIO can be, rest unmapped. */
+	zero_table(top);
+	for (uint64_t i = 0; i < MMU_COVER >> BLK_SHIFT; i++)
+		top[i] = (i << BLK_SHIFT) | DEV_FLAGS | D_BLOCK;
+	top[FB_PHYS >> BLK_SHIFT] = (FB_PHYS & ~(BLK_SIZE - 1)) | NC_FLAGS | D_BLOCK;
 
-	/* L3 for each block that holds part of the image */
+	/* L3 for each block that holds part of the image. */
 	for (uint64_t blk = img_lo >> BLK_SHIFT; blk <= (img_hi - 1) >> BLK_SHIFT; blk++) {
 		uint64_t *l3 = (uint64_t *)(pool + (1 + n_l3++) * PG_SIZE);
 		uint64_t base = blk << BLK_SHIFT;
@@ -101,7 +118,7 @@ int mmu_enable(struct mmu_info *info)
 			int ours = pa >= img_lo && pa < img_hi;
 			l3[i] = pa | (ours ? WB_FLAGS : DEV_FLAGS) | D_PAGE;
 		}
-		l2[blk] = (uintptr_t)l3 | D_TABLE;
+		top[blk] = (uintptr_t)l3 | D_TABLE;
 	}
 	info->n_l3 = n_l3;
 

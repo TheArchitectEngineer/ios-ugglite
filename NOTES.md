@@ -2,7 +2,111 @@
 
 ## Agent handoff / active work (2026-10-15, latest)
 
-### >>> UPDATE 2026-10-18 (read first, then the 10-17 handoff below) <<<
+### >>> UPDATE 2026-10-20 (read first): second target, Redmi Note 5A "ugglite" <<<
+
+The user asked whether this project can be retargeted from sweet (SM7150) to the
+**Redmi Note 5A / ugglite (MSM8917 + PM8937, 4x Cortex-A53)**, the phone they
+already run postmarketOS on (`~/Projects/postmarket`, NOT `postmarketos`).
+
+**Answer: yes, same kernel and same iOS userland, but it is a re-port, not a
+config change.** Two of the boards' SoCs differ in ways that reach into the
+kernel core, and one of them is a hard gate:
+
+1. **Page size (the go/no-go).** The SWEET board config is a 16K-page kernel
+   (`__ARM_16K_PG__` in `pexpert/pexpert/arm64/SWEET.h`, patch 0004) because
+   the iOS 16 userspace is built for 16K pages. sweet's Kryo 470 reports
+   `ID_AA64MMFR0_EL1 = 0x101122`, `TGran16 = 1` (supported). **Cortex-A53
+   implements only 4K and 64K** (`TGran16 = 0`; QEMU's `aarch64_a53_initfn`
+   models `id_aa64mmfr0 = 0x1122`). Note the encoding differs between fields:
+   TGran4/TGran64 use 0b0000 = supported / 0b1111 = not implemented, while
+   TGran16 uses 0b0001 = supported / 0b0000 = not supported. Escape hatch:
+   XNU still has a 4K native path (`pmap.c` picks `pmap_pt_attr_4k` /
+   `TCR_EL1_4KB` when `__ARM_16K_PG__` is unset) and `VMAPPLE.h` sets
+   `ARM_PARAMETERIZED_PMAP` + `__ARM_MIXED_PAGE_SIZE__`, which is the Apple
+   A7/A8 arrangement (16K userspace pages on 4K hardware). **Whether that path
+   still works in xnu-8796 on real 4K silicon is unproven and is the single
+   biggest risk in the port.**
+2. **Interrupt controller.** sweet is GICv3 (`0x17a00000` + redistributors,
+   ICC_* system registers). ugglite is **GICv2** (`qcom,msm-qgic2`, GICD
+   `0xb000000`, GICC `0xb002000`, confirmed in both the stock MIUI DTB #07 and
+   the mainline DTS). `pe_init_fiq()`'s non-GICv3 branch in xnu is an **empty
+   stub**, so this is new kernel work (~150-200 lines), not a parameter.
+3. **Timer PPI.** Both boards list the timers as secure-phys, phys, virt, hyp,
+   but **ugglite's virtual timer is INTID 20** (`<GIC_PPI 4>`) where sweet's is
+   **19** (`<GIC_PPI 3>`). XNU hardcodes `SWEET_VTIMER_INTID`; the port needs
+   per-board values.
+
+**Work done 2026-10-20 (shim only, nothing booted on hardware yet):** the shim
+is now board-selectable and can characterise an unknown board from the panel.
+
+- `shim/board.h` (new): per-board constants, selected with `-DBOARD_UGGLITE`
+  (default sweet). ugglite values from the stock DTB #07 and the mainline DTS:
+  splash `0x90001000` (720x1280 RGB888, 24 bpp) with `0x90000000` as fallback,
+  GICD/GICC above, PSHOLD `0x4ab000`, IMEM restart_reason `0x860065c`,
+  VTIMER_INTID 20 / PTIMER 19.
+- `shim/probe.c` (new): the board probe. Prints MIDR/MPIDR, the full
+  `ID_AA64MMFR0` decode (with the TGran16 encoding called out), PFR0/ISAR0,
+  CNTFRQ, the live FDT's model, `/memory` reg, CPU count, GIC compatible+reg,
+  timer PPIs, and the reserved-memory list; then GIC ID/arch-rev, and finally
+  an **AT S1E1R granule test** that builds a real identity-mapped page table
+  for 4K and (only if the ID register says so) 16K.
+  **Safety:** it deliberately does NOT program an unsupported `TG0`, because
+  TCR_EL1 becomes architecturally UNKNOWN and the AT can hang the core - on a
+  phone with no reset that means a battery pull. All cheap output is printed
+  before the AT tests so a hang still leaves the important facts on screen.
+- `shim/build.sh`: takes a board argument, prefers `aarch64-linux-gnu-gcc` and
+  falls back to `clang --target=aarch64-none-elf` + lld (this laptop has no
+  GNU cross gcc). Adds `-fno-jump-tables`: clang otherwise lowers the panic
+  string select into a `.rodata` address table, which needs an absolute
+  relocation, and the shim must stay position independent.
+- `shim/console.c`: 24 bpp RGB888 support (ugglite) alongside 32 bpp (sweet).
+- `shim/mmu.c`: 4K granule layout for ugglite (T0SZ=28 -> level 1, 1GB blocks,
+  512-entry table) vs the 16K one for sweet; `TCR_VAL` now sets IPS=40-bit.
+- `shim/fdt.c`: real walker (path lookup, children/siblings, properties) on top
+  of the old `/chosen` reader. **Bug found and fixed by host testing:** the
+  property-skip arithmetic omitted the 4-byte name offset (`p+4+len` instead of
+  `p+8+len`), so every walk died at the first property. Verified on the real
+  ugglite DTB: model string, `/memory`, 4 CPUs, `qcom,msm-qgic2` at
+  `0xb000000`/`0xb002000`, 5 reserved regions. The GIC is at
+  `/soc/interrupt-controller` and the timer at `/soc/timer`, not at the root.
+- `shim/shim.c`: GICv3-only code (redistributor find/probe, ICC tests, SGI) is
+  now behind `!GIC_IS_V2`; `secondary_main` still exists on both boards because
+  `start.S` references it. `shim/ufs.c`: local `streq()` (clang emitted a real
+  `strcmp` call where gcc used the builtin).
+
+**Build (both boards compile clean; sweet path unchanged when built without
+`-DBOARD_UGGLITE`):**
+`./shim/build.sh "" ugglite` -> `shim/out/shim-boot-ugglite.img`
+(483,328 bytes, SHA256 `32c3c9b8f1a984c45411164ce6346026558c1dc88989f1c0fd5782cb6368ade2`,
+DTB `dtb/ugglite.dtb` = stock MIUI DTB #07 "MSM8917-PMI8937 MTP", board-id 8).
+Boot image verified with `tools/unpack_bootv2.py` (kernel 184320 bytes, dtb
+byte-identical to the input) and the ARM64 Image header decoded (`b _start`,
+magic `ARM\x64`, image_size 0x2d000). **NOT booted on the ugglite: no hardware
+test has been done, and QEMU is not installed on this laptop.**
+
+**NEXT (in order):**
+1. `fastboot boot shim/out/shim-boot-ugglite.img` on the Note 5A with the phone
+   in fastboot. Expected: red "SHIM ugglite loader + board probe" screen, then
+   the probe results, then reset in ~3 min.
+2. Read the panel: `MMFR0`, `GRANULE` (ID decode), `AT4K`/`AT16K`, `MEM`,
+   `CPUS`, `GICCOMPAT`/`GICREG`, `VTIMER`. If the screen is blank, rebuild with
+   `-DFB_PHYS=0x90000000` (the stock splash region starts there).
+3. If `GRANULE` says 16K NOT SUPPORTED (expected for A53), the port must take
+   the mixed-page-size path. **Read `osfmk/arm/pmap/pmap.c` for
+   `__ARM_MIXED_PAGE_SIZE__` before writing any driver**, because if 4K
+   hardware + 16K userspace is dead in xnu-8796 the whole port is dead.
+4. Then, in rough size order: GICv2 driver, eMMC/SDHCI root (patches
+   0028/0030/0069 are UFS-only and do not transfer), USB device mode
+   (0072-0077 are DWC3-specific), a new memory map in `tools/mkadt.py`
+   (ugglite has no upper bank; 32-bit PA space with carve-outs at 0x84a00000,
+   0x86800000, 0x8b800000, 0x8c900000, 0x90001000), display at 720x1280,
+   touch (FT5x06 @0x38 or GT911 @0x5d on BLSP1 I2C3), PM8937 keys, and an
+   iPhone 8 (D20AP, 750x1334) identity - a better fit for 720x1280 than the
+   iPhone X, and also A11/no-PAC so the same plain-arm64 userland works.
+   Patches 0019-0027 and 0035-0068 (the GUI/HID/userspace contract) transfer
+   essentially unchanged and are the expensive part already done.
+
+### >>> UPDATE 2026-10-18 (the 10-20 ugglite section above is newer) <<<
 
 **STATE at end of 2026-10-18 (evening):**
 - On the phone: userdata = **image v15** (`/run/media/dipa/android/ios-sweet-ipsw/ios16-root-20H392-v15.img/.simg`; = v14 + `/private/var/preferences/SystemConfiguration/preferences.plist` with one network service "USB Ethernet": Interface DeviceName ue0 Type Ethernet, IPv4 Manual 192.168.7.2/24 router 192.168.7.1, DNS 1.1.1.1 8.8.8.8, set "Automatic" as CurrentSet). Fallback image v14 (v12/v13 deleted).
