@@ -104,9 +104,9 @@ diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
 +
 +/* Called once the kernel has a VA mapping for the framebuffer. */
 +void
-+sweet_early_relocate(uintptr_t va)
++sweet_early_relocate(uint64_t va)
 +{
-+	early_fb = (volatile uint8_t *)va;
++	early_fb = (volatile uint8_t *)(uintptr_t)va;
 +}
  static unsigned int early_started, early_disabled, early_panicking;
  
