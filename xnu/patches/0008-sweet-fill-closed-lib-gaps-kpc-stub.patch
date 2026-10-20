@@ -13,11 +13,34 @@ index 347efee..4c384ed 100644
  #
  #
  # Mach Operating System
-@@ -60,7 +60,7 @@
+@@ -62,7 +62,7 @@
  #  LIBKERN_RELEASE =[ LIBKERN_BASE zlib ]
  #  LIBKERN_DEV =    [ LIBKERN_BASE zlib iotracking ]
  #  LIBKERN_DEBUG =  [ LIBKERN_BASE zlib iotracking ]
 -#  PERF_DBG_BASE =  [ config_dtrace mach_kdp config_serial_kdp kdp_interactive_debugging config_kdp_coredump_encryption config_pervasive_energy PERFMON_BASE ]
++#  PERF_DBG_BASE =  [ config_dtrace mach_kdp config_serial_kdp kdp_interactive_debugging config_kdp_coredump_encryption config_pervasive_energy PERFMON_BASE kperf kpc ]
+ #  PERF_DBG_RELEASE=[ PERF_DBG_BASE ist_kdebug ]
+ #  PERF_DBG_DEV =   [ PERF_DBG_BASE lock_stats zleaks alternate_debugger sched_hygiene_debug config_debug_syscall_rejection config_iotrace ]
+ #  PERF_DBG_DEBUG = [ PERF_DBG_BASE lock_stats zleaks alternate_debugger sched_hygiene_debug config_debug_syscall_rejection config_iotrace ]
+diff --git a/config/MASTER.arm64.ugglite b/config/MASTER.arm64.ugglite
+--- a/config/MASTER.arm64.ugglite
++++ b/config/MASTER.arm64.ugglite
+@@ -4,8 +4,8 @@
+ # 4K granule, GICv2, four A53s), not in the kernel option set. This file must
+ # exist separately because doconf looks for MASTER.<machine-type> by name;
+ # without it the config silently lost nos_arm_asm, none of the arm64 assembly
+-# (start.s, locore.s) was built, and the link failed with hundreds of
+-# undefined symbols.
++# (start.s, locore.s) was built, and the link failed with hundreds of
++# undefined symbols. kperf/kpc stay for the same reason as on sweet.
+ #
+ #
+ # Mach Operating System
+@@ -62,7 +62,7 @@
+ #  LIBKERN_RELEASE =[ LIBKERN_BASE zlib ]
+ #  LIBKERN_DEV =    [ LIBKERN_BASE zlib iotracking ]
+ #  LIBKERN_DEBUG =  [ LIBKERN_BASE zlib iotracking ]
+-#  PERF_DBG_BASE =  [ config_dtrace mach_kdp config_serial_kdp kdp_interactive_debugging config_kdp_coredump_encryption config_pervasive_energy PERFMON_BASE kperf ]
 +#  PERF_DBG_BASE =  [ config_dtrace mach_kdp config_serial_kdp kdp_interactive_debugging config_kdp_coredump_encryption config_pervasive_energy PERFMON_BASE kperf kpc ]
  #  PERF_DBG_RELEASE=[ PERF_DBG_BASE ist_kdebug ]
  #  PERF_DBG_DEV =   [ PERF_DBG_BASE lock_stats zleaks alternate_debugger sched_hygiene_debug config_debug_syscall_rejection config_iotrace ]
@@ -358,4 +381,30 @@ index f8d0d2e..ccbb188 100644
 +	.global	EXT(SleepToken)
  LEXT(SleepToken)
  	.space	(stSize_NUM),0
+ #endif
+diff --git a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
+--- a/osfmk/arm/pmap/pmap.c
++++ b/osfmk/arm/pmap/pmap.c
+@@ -10980,8 +10980,22 @@
+ /**
+  * Ensure that 64-bit devices using 4K pages can nest the commpage completely
+  * above the maximum userspace VA.
++ *
++ * SWEET/ugglite: this only holds when the maximum userspace VA is the
++ * iPhoneOS one (0x0fc0000000). The macOS build defines
++ * XNU_PLATFORM_MacOSX, which raises MACH_VM_MAX_ADDRESS to
++ * 0x7ffffe000000 (128TB) - a range this kernel's 36-bit VA cannot address at
++ * all, and which no 4K-granule device with the standard commpage placement
++ * could satisfy. Use the value the platform's userspace actually gets, so the
++ * check keeps its meaning (the commpage nests above user mappings) instead of
++ * failing on a VA limit that does not apply here.
+  */
++#if defined(SWEET)
++static_assert((_COMM_PAGE64_BASE_ADDRESS & ~ARM_TT_L1_OFFMASK) >=
++    ((mach_vm_offset_t)0x0000000FC0000000ULL));
++#else
+ static_assert((_COMM_PAGE64_BASE_ADDRESS & ~ARM_TT_L1_OFFMASK) >= MACH_VM_MAX_ADDRESS);
++#endif
+ #else
+ #error Nested shared page mapping is unsupported on this config
  #endif
