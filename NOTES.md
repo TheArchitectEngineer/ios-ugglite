@@ -386,6 +386,25 @@ Audited the whole series afterwards: no exact-string `SWEET` comparisons remain
 in scripts, Makefiles or the workflow. `#if defined(SWEET)` sites are fine
 because UGGLITE.h defines `SWEET` as well. Rebuild is run 39363870802.
 
+**Build 8: 8 undefined symbols, caused by a stale copy of the MASTER config
+(2026-10-20).** `_sweet_amfi_policy_register`, `_sweet_ufs_rootdev`,
+`_sweet_log_append` and `_br_sha384/512_*` were missing even though
+`sweet_amfi.c` and `sweet_ufs.c` are `standard` in `bsd/conf/files`. The config
+was the problem: `MASTER.arm64.ugglite` had been copied from sweet's file **as
+it looked before 0026/0037/0057 edited it**, so its `FILESYS_BASE` lacked
+`mockfs sweet_hfs bindfs` and still had `config_ext_resolver`. Those three
+patches now patch the ugglite line too. After 0001-0081 the two MASTER files
+differ only in their comment headers. Rebuild is run 39364673967.
+
+**Meta-pattern worth stating plainly.** Nine builds, and every failure has been
+the same shape: **a place where the codebase assumes exactly one board**. The
+kernel logic, the GICv2 driver and the 4K page handling have not been the
+problem - each time it was a second copy of a config, an `#if` on a board
+macro, or a string comparison that only knew `SWEET`. Audited after build 8:
+no exact-string `SWEET` comparisons remain in scripts, Makefiles or the
+workflow, and no config file is duplicated per board except the two MASTERs,
+which are now kept in step.
+
 **GICv2 IPI fixed in patch 0083 (2026-10-20).** `SweetCPU::signalCPU()`
 (patch 0018, rewritten by 0065) sent the cross-CPU signal with
 `ICC_SGI1R_EL1`, a GICv3 system register that a GICv2 CPU interface does not
