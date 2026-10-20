@@ -309,7 +309,7 @@
  #
 --- /dev/null
 +++ b/pexpert/pexpert/arm64/UGGLITE.h
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,94 @@
 +/*
 + * Board config for the Redmi Note 5A ("ugglite", Qualcomm MSM8917 +
 + * PM8937): 4x Cortex-A53, ARMv8.0, no PAC, no 16K granule.
