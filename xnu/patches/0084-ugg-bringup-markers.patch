@@ -1,66 +1,93 @@
 --- a/osfmk/arm64/start.s
 +++ b/osfmk/arm64/start.s
-@@ -570,6 +570,15 @@
+@@ -570,6 +570,23 @@
  	ldr		x24, [x20, BA_MEM_SIZE]				// Get the physical memory size
  	adrp	x25, EXT(bootstrap_pagetables)@page	// Get the start of the page tables
  	ldr		x26, [x20, BA_BOOT_FLAGS]			// Get the kernel boot flags
 +#if defined(BOARD_UGGLITE)
-+	MOV64	x10, 0x90000000
-+	mov		w11, #0xff0000ff
-+	mov		x12, #64
-+1:	str		w11, [x10], #4
-+	subs	x12, x12, #1
++	/* marker 0: 0x0000ffff */
++	MOV64	x10, (0x90000000 + 0 * 2160)
++	MOV64	x11, 0x0000ffff
++	mov		x12, #16
++2:	mov		x13, #720
++1:	strb	w11, [x10], #1
++	lsr		w14, w11, #8
++	strb	w14, [x10], #1
++	lsr		w14, w11, #16
++	strb	w14, [x10], #1
++	subs	x13, x13, #1
 +	b.ne	1b
++	subs	x12, x12, #1
++	b.ne	2b
 +	dsb		sy
 +#endif
  
  	// Clear the registers that will be used to store the userspace thread pointer and CPU number.
  	// We may not actually be booting from ordinal CPU 0, so this register will be updated
-@@ -694,6 +703,15 @@
- 
- 	/*
- 	 * Setup the V=P bootstrap mapping
+@@ -699,8 +716,42 @@
+ 	lsr		x5,  x24, #(ARM_TT_L2_SHIFT)
+ 	/* create_bootstrap_mapping(vbase, pbase, num_ents, L1 table, freeptr) */
+ 	create_bootstrap_mapping x0,  x4,  x5, x1, x2, x6, x10, x11, x12, x13
 +#if defined(BOARD_UGGLITE)
-+	MOV64	x10, 0x90000000
-+	mov		w11, #0xffffff00
-+	mov		x12, #64
-+1:	str		w11, [x10], #4
-+	subs	x12, x12, #1
++	/* marker 1: 0x00ffff00 */
++	MOV64	x10, (0x90000000 + 16 * 2160)
++	MOV64	x11, 0x00ffff00
++	mov		x12, #16
++2:	mov		x13, #720
++1:	strb	w11, [x10], #1
++	lsr		w14, w11, #8
++	strb	w14, [x10], #1
++	lsr		w14, w11, #16
++	strb	w14, [x10], #1
++	subs	x13, x13, #1
 +	b.ne	1b
++	subs	x12, x12, #1
++	b.ne	2b
 +	dsb		sy
 +#endif
- 	 * x5 - total number of L2 entries to allocate
- 	 */
- 	lsr		x5,  x24, #(ARM_TT_L2_SHIFT)
-@@ -703,6 +721,15 @@
+ 
  	/* Setup the KVA bootstrap mapping */
++#if defined(BOARD_UGGLITE)
++	/* marker 2: 0x00ff00ff */
++	MOV64	x10, (0x90000000 + 32 * 2160)
++	MOV64	x11, 0x00ff00ff
++	mov		x12, #16
++2:	mov		x13, #720
++1:	strb	w11, [x10], #1
++	lsr		w14, w11, #8
++	strb	w14, [x10], #1
++	lsr		w14, w11, #16
++	strb	w14, [x10], #1
++	subs	x13, x13, #1
++	b.ne	1b
++	subs	x12, x12, #1
++	b.ne	2b
++	dsb		sy
++#endif
  	lsr		x5,  x24, #(ARM_TT_L2_SHIFT)
  	create_bootstrap_mapping x14, x15, x5, x3, x2, x9, x10, x11, x12, x13
+ 
+@@ -726,6 +777,23 @@
+ #endif
+ 
+ 	/* Ensure TTEs are visible */
 +#if defined(BOARD_UGGLITE)
-+	MOV64	x10, 0x90000000
-+	mov		w11, #0xffff00ff
-+	mov		x12, #64
-+1:	str		w11, [x10], #4
-+	subs	x12, x12, #1
++	/* marker 3: 0x00ffffff */
++	MOV64	x10, (0x90000000 + 48 * 2160)
++	MOV64	x11, 0x00ffffff
++	mov		x12, #16
++2:	mov		x13, #720
++1:	strb	w11, [x10], #1
++	lsr		w14, w11, #8
++	strb	w14, [x10], #1
++	lsr		w14, w11, #16
++	strb	w14, [x10], #1
++	subs	x13, x13, #1
 +	b.ne	1b
++	subs	x12, x12, #1
++	b.ne	2b
 +	dsb		sy
 +#endif
- 
- #if defined(SWEET)
- 	/*
-@@ -728,6 +755,15 @@
- 	/* Ensure TTEs are visible */
  	dsb		ish
  
-+#if defined(BOARD_UGGLITE)
-+	MOV64	x10, 0x90000000
-+	mov		w11, #0xff00ffff
-+	mov		x12, #64
-+1:	str		w11, [x10], #4
-+	subs	x12, x12, #1
-+	b.ne	1b
-+	dsb		sy
-+#endif
- 
- 	b		common_start
  
