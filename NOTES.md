@@ -424,6 +424,44 @@ now carries `-DSWEET_FAMILY`, which reaches every TU; the header definition is
 kept as a harmless duplicate for files that do include it. Rebuild is run
 39365727069.
 
+### >>> 🎉 UGGLITE KERNEL BUILDS (CI 39365727069, 2026-10-20) <<<
+
+**The ugglite XNU kernel compiles and links.** Ten CI attempts; the last one
+passed. Artifact: `xnu/out-0082/kernel.development.ugglite`, 16 MB,
+SHA256 `12c1f5e5948d51b52a1418878f2f0430d05c4cdcbd1951c17483103191fe9c8d`,
+`Mach-O 64-bit arm64` (**not arm64e** - that was build 1-3's bug).
+
+Verified in the binary:
+- `sweet_amfi_policy_register`, `sweet_log_append`, `sweet_ufs_rootdev`,
+  `br_sha384_init` all present (the 8 symbols that were missing in build 9)
+- `_sweet_gic_ack`, `_sweet_gic_eoi`, `_sweet_gic_send_sgi` present
+- the GICv2 strings `SWEET GIC: v2 distributor %p cpu-interface %p` and
+  `SWEET GIC: v2 virtual timer INTID %u` are in the image, so the
+  `#elif defined(SWEET_GIC_V2)` branch of `pe_init_fiq()` is the one compiled
+  in, not the GICv3 code and not the empty stub.
+
+**Boot image built:** `shim/out/shim-boot-ugglite.img`, 16,504,832 bytes,
+SHA256 `0cae56a7e55d0b0185f209b2303973d4d10dcb8c7a87b26d1101cb786e656c3d`.
+Layout: header v0, 2048-byte pages, kernel `Image.gz-dtb` (300 KB gzip +
+appended DTB), ramdisk = the 16 MB SWEETXNU payload (byte-identical to
+`/tmp/payload-ugg.bin`). Payload built from the ugglite ADT with
+`rd=md0 cpus=1`, so it boots the kernel with no root filesystem - the goal is
+just to see `SWEET GIC: v2 distributor ...` and the timer firing.
+
+**Build history, for the next person (10 runs, one root cause each):**
+1-3. built as **arm64e** (patch 0004's `ifneq` was inverted, so it set arm64e
+     for exactly the boards that must not have it - **sweet was affected too**)
+4.   no `config/MASTER.arm64.ugglite` -> no kernel options -> no assembly
+5.   `KPC_MAX_COUNTERS` (MASTER copy predated 0008) + the 4K commpage
+     `static_assert` (macOS VA limit vs the iPhoneOS one; first 4K build ever)
+6.  39 `#if defined(ARM64_BOARD_CONFIG_SWEET)` guards -> `SWEET_FAMILY`
+7.  3 staging scripts exited early (`== SWEET`)
+8.  `MASTER.arm64.ugglite` was a stale copy (FILESYS_BASE lacked mockfs/
+     sweet_hfs/bindfs)
+9.  `SWEET_FAMILY` was a *header* macro but 20+ files never include
+     `board_config.h` -> empty objects; fixed with `-DSWEET_FAMILY`
+10. **passed**
+
 **GICv2 IPI fixed in patch 0083 (2026-10-20).** `SweetCPU::signalCPU()`
 (patch 0018, rewritten by 0065) sent the cross-CPU signal with
 `ICC_SGI1R_EL1`, a GICv3 system register that a GICv2 CPU interface does not
