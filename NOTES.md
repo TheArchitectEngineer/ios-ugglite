@@ -2,21 +2,24 @@
 
 ## Agent handoff / active work (2026-10-20, latest)
 
-### >>> ACTIVE: port iOS to ugglite; fix early framebuffer VA and rebuild <<<
+### >>> ACTIVE: port iOS to ugglite; map splash range and verify MMU handoff <<<
 
 The project goal is to boot iOS on the Redmi Note 5A (`ugglite`). The following
 hardware progress is user-reported on 2026-10-20 and was not independently
 re-observed in this session:
 
-- The kernel builds and boots through shim handoff. XNU completes `start.s`;
-  ten color bands verify boot arguments, bootstrap page tables, translation
-  registers, cache/TLB invalidation and MMU enable.
-- `arm_init` is running: `sweet_early_mark(1)` paints a thin green line at the
-  bottom of the panel.
-- The early console's byte addressing, 24-bpp pixel path and panel geometry
-  (720x1280, 2160-byte stride, physical framebuffer `0x90000000`) are verified.
+- The kernel builds and the shim hands off. The latest tested image displayed
+  the ten `start.s` diagnostic bands, proving execution reached the marker
+  immediately after the `SCTLR_EL1` write. That marker is before the following
+  `ISB`, so it does not prove the MMU transition completed.
+- The latest test did not show the solid-green early C fill; `arm_init` is not
+  yet confirmed. The reported panel geometry is 720x1280 RGB888, 2160-byte
+  stride, with the framebuffer at physical `0x90000000`.
+- Byte-addressed early-console arithmetic and the 24-bpp pixel path were
+  verified in the source and build, but the whole-panel fill is not yet
+  verified on hardware.
 
-**Fix committed and built:** commit `15e1497` sets `UGG_EARLY_FB` to
+**Earlier fix committed and built:** commit `15e1497` sets `UGG_EARLY_FB` to
 `0x90000000`, correcting build 27's `0xfffffe0017000000` (which maps to PA
 `0x9d500000`) and removing the stale contradictory comment. Repository
 validation passed (84 patches validated). GitHub Actions run `39402408243`
@@ -29,9 +32,29 @@ SHA256 `421119cedbf1ec90cee3eaa0a6337af4de53083b48a3a3aec146b9605d85fd33`.
 Disassembly/data inspection confirms the early framebuffer pointer initializes
 to `0x90000000`; the marker path compiles for 720x1280 with a 2160-byte stride.
 
-**Next action:** temporarily `fastboot boot` the rebuilt image and verify the
-panel becomes solid green at `arm_init` entry. The current build has not yet
-been tested on hardware. Do not flash partitions.
+**Hardware result (user-reported, 2026-10-20):** the image was temporarily
+booted, showed yellow, cyan, magenta, green, blue, red, black, red, green and
+blue bands with the rest of the panel white, then the user restarted Android.
+No solid-green `arm_init` fill was observed. The tested image was reported as
+SHA256 `81ec54d530473ec8e72bb5662b26d9e1a2adb0de76b8a0401283721a2425bb24`;
+this has not been matched to the kernel artifact hash above. The phone is now
+in Android; do not reboot it without asking.
+
+**Current diagnosis, source-grounded but not yet hardware-confirmed:** the
+Ugglite build uses a 4 KiB hardware translation granule, so one L2 block maps
+2 MiB. The existing bootstrap code adds only one framebuffer L2 entry, while
+the stock DT reserves `0x01400000` (20 MiB) at `0x90000000`; the panel's
+720x1280 RGB888 surface alone is 2,764,800 bytes and crosses the first 2 MiB
+boundary. This can fault during the early C fill. Also, marker 9 is stored
+immediately after the `SCTLR_EL1` write but before the following `ISB`, so the
+last observed stripe does not establish that execution continued with the MMU
+enabled.
+
+**Next patch:** `0085-ugg-framebuffer-map-and-post-mmu-marker.patch` maps all
+ten 2 MiB entries covering the reserved 20 MiB splash range and adds a
+distinct row-160 marker immediately after the MMU-enable `ISB`. Validate the
+patch series, commit, run GitHub Actions, and inspect the compiled constants
+before asking the user for a fastboot test. Do not flash partitions.
 
 After solid green, continue the marker ladder through `PE_init_platform`,
 `ml_parse_cpu_topology`, `arm_vm_init` and `serial_init`; then validate GICv2

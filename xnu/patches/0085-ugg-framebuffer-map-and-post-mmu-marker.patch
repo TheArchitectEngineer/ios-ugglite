@@ -1,0 +1,64 @@
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -766,19 +766,29 @@
+ 	/*
+-	 * Splash framebuffer: one 32MB Normal-NC block in the EXISTING V=P
+-	 * L2 table. Both framebuffer and RAM use L1 index 0; another call to
+-	 * create_bootstrap_mapping would replace the RAM L2 table.
+-	 * SWEET uses 16K pages and all bring-up RAM is below 4GB, so the first
+-	 * V=P L2 page is bootstrap_pagetables + 2*PGBYTES.
++	 * Splash framebuffer: Normal-NC entries in the existing V=P L2 table.
++	 * Both framebuffer and RAM use the same L1 slot, so install these entries
++	 * directly instead of calling create_bootstrap_mapping again.
++	 * SWEET uses one 32MB block; Ugglite's 4K granule needs ten 2MB blocks
++	 * to cover its 20MB reserved splash region.
+ 	 */
+ #if defined(BOARD_UGGLITE)
+ 	MOV64	x10, 0x90000000
+ #else
+ 	MOV64	x10, 0x9c000000
+ #endif
+ 	MOV64	x11, (ARM_TTE_TYPE_BLOCK | ARM_TTE_VALID | ARM_TTE_BLOCK_SH(SH_OUTER_MEMORY) | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_WRITECOMB) | ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_PNX | ARM_TTE_BLOCK_NX)
+ 	orr		x11, x11, x10
+ 	and		x12, x10, #(ARM_TT_L2_INDEX_MASK)
+ 	lsr		x12, x12, #(ARM_TT_L2_SHIFT)
+ 	add		x13, x25, #(2 * PGBYTES)
++#if defined(BOARD_UGGLITE)
++	mov		x14, #10
++8:
++	str		x11, [x13, x12, lsl #TTE_SHIFT]
++	add		x11, x11, #(ARM_TT_L2_SIZE)
++	add		x12, x12, #1
++	subs	x14, x14, #1
++	b.ne	8b
++#else
+ 	str		x11, [x13, x12, lsl #TTE_SHIFT]
++#endif
+ #endif
+@@ -1051,8 +1065,26 @@
+ 	dsb		sy
+ #endif
+ 	isb		sy
++#if defined(BOARD_UGGLITE)
++	/* Marker 10: row 160, proving a framebuffer store after MMU enable. */
++	MOV64	x10, 0x90054600
++	movz	w11, #0x0, lsl #16
++	movk	w11, #0xffff
++	mov		x12, #16
++2:	mov		x13, #720
++1:	strb	w11, [x10], #1
++	lsr		w14, w11, #8
++	strb	w14, [x10], #1
++	lsr		w14, w11, #16
++	strb	w14, [x10], #1
++	subs	x13, x13, #1
++	b.ne	1b
++	subs	x12, x12, #1
++	b.ne	2b
++	dsb		sy
++#endif
+ 
+ #if !VMAPPLE && !defined(SWEET)
+ 	MOV64   x1, SCTLR_EL1_DEFAULT
+ 	cmp		x0, x1
+ 	bne		.
