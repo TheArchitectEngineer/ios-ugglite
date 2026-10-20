@@ -287,6 +287,29 @@ remaining risk is whether those `PAGE_RATIO == 4` paths hold under real load.
 2. Then the remaining SoC work: SDHCI/eMMC root, USB device mode, 720x1280
    panel, touch, PM8937 keys.
 
+**First UGGLITE build attempt (CI 39356581088, 2026-10-20): configuration OK,
+four compile errors.** All but two traced to one cause: **UGGLITE was built as
+arm64e**. Patch 0004 exempted only `SWEET` from the arm64e default, so UGGLITE
+fell through to a pointer-authenticated build, which produced every PAC/JOP
+error in the log (`MANIPULATE_SIGNED_THREAD_STATE` and `pmap_sign_user_ptr`
+undeclared, `jop_pid` missing from `machine_thread`,
+`ARM_MACHINE_THREAD_DISABLE_USER_JOP` undeclared in status.c, and the
+`__ptrauth` pointee mismatch in vfs_cache.c). Fixed in 0004 by exempting both
+targets. The other two: `sweet_vtimer_intid` was declared in protos.h only for
+`ARM64_BOARD_CONFIG_SWEET` (fixed in 0017), and `SWEET_SMP_MAX_CPUS` lives in
+SWEET.h which an UGGLITE build does not include (now defined as 4 in
+UGGLITE.h). Commit 615778b; rebuild is run 39357781169.
+
+**KNOWN RUNTIME BUG still to fix (GICv2 has no ICC_SGI1R_EL1):**
+`SweetCPU::signalCPU()` (patch 0018, rewritten by 0065) sends the cross-CPU
+signal with `ICC_SGI1R_EL1`, which is a GICv3 system register. A GICv2 CPU
+interface has no such register - the SGI is raised by writing the distributor's
+`GICD_SGIR` (0xf00) with the target list and INTID. On ugglite the write would
+be UNDEFINED or ignored, so SMP would hang in the self-SGI check or panic
+"SWEET CPU: SGI1 self-test timed out". This compiles, so CI will not catch it;
+it needs a `SWEET_GIC_V2` branch in signalCPU writing GICD_SGIR, and should be
+done before any multi-core ugglite boot. Single-core (`cpus=1`) is unaffected.
+
 **Repo moved 2026-10-20:** the tree is now pushed to **`cuwayo/ios-ugglite`**
 (the original `dipa-studio/ios-sweet` is not writable by this account). The
 workflow there defaults to `MACHINE_CONFIG=UGGLITE` and no longer runs on push,
