@@ -19,6 +19,25 @@ the same serial in fastboot. The host verified
 bootloader transport only. The panel observation is still required to establish
 whether the row-160 post-MMU marker or the solid-green `arm_init` fill appears.
 
+**Root cause and pending fix (2026-10-20):** static inspection of the 0085
+artifact proves the fault occurs at the MMU transition, not in `arm_init`.
+`_start_first_cpu` reaches `MSR SCTLR_EL1` and faults on the next fetch, before
+the post-MMU store. The loaded `sysreg_restore.tcr_el1` is
+`0x00000022a51a251a`: its `T1SZ=26` makes TTBR1 cover only
+`0xffffffc000000000..0xffffffffffffffff`, while the kernel is linked at
+`0xfffffe0007004000`, outside that range. This is the structural error in the
+original 4K port.
+
+Patch 0086 (`ugglite-ttbr1-l0-bootstrap`) changes only Ugglite's TTBR1 boot
+range to `T1SZ=23`, which contains the `0xfffffe...` kernel VA, and adds the
+necessary TTBR1 L0 root in `start.s`. TTBR0 retains its existing L1 identity
+map (`T0SZ=26`). The revised table layout is: V=P L1, KVA L0, KVA L1, V=P L2,
+KVA L2; the framebuffer entries move to the V=P L2 at page 4. The eight-page
+bootstrap reservation is sufficient. The patch was generated from the matching
+CI build tree, dry-run applied there, and its Ugglite `start.s` assembled
+locally. `python3 tools/validate-repo.py` passed for patches 0001-0086. CI
+and the next temporary hardware boot are pending.
+
 **Hardware observation (user-reported, 2026-10-20):** the prior test showed
 yellow, cyan, magenta, green, blue, red, black, red, green and blue bands, with
 the rest of the panel white. The user then restarted Android. No row-160
