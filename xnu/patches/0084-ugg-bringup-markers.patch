@@ -153,7 +153,7 @@
  
  	// Set up MAIR attr0 for normal memory, attr1 for device memory
  	mov		x0, xzr
-@@ -797,6 +911,25 @@
+@@ -797,9 +911,47 @@
  	mov		x1, #(MAIR_POSTED_COMBINED_REORDERED << MAIR_ATTR_SHIFT(CACHE_ATTRINDX_POSTED_COMBINED_REORDERED))
  	orr		x0, x0, x1
  	msr		MAIR_EL1, x0
@@ -179,3 +179,77 @@
  	isb
  	tlbi	vmalle1
  	dsb		ish
++#if defined(BOARD_UGGLITE)
++	/* marker 7: 0x0000ff */
++	movz	x10, #0x9003, lsl #16
++	movk	x10, #0xb100
++	movz	w11, #0x0, lsl #16
++	movk	w11, #0xff
++	mov		x12, #16
++2:	mov		x13, #720
++1:	strb	w11, [x10], #1
++	lsr		w14, w11, #8
++	strb	w14, [x10], #1
++	lsr		w14, w11, #16
++	strb	w14, [x10], #1
++	subs	x13, x13, #1
++	b.ne	1b
++	subs	x12, x12, #1
++	b.ne	2b
++	dsb		sy
++#endif
+ 
+ 
+ #if defined(BCM2837)
+@@ -821,6 +973,25 @@
+ 	 */
+ 	tlbi	vmalle1
+ 	ic		iallu
++#if defined(BOARD_UGGLITE)
++	/* marker 8: 0xff0000 */
++	movz	x10, #0x9004, lsl #16
++	movk	x10, #0x3800
++	movz	w11, #0xff, lsl #16
++	movk	w11, #0x0
++	mov		x12, #16
++2:	mov		x13, #720
++1:	strb	w11, [x10], #1
++	lsr		w14, w11, #8
++	strb	w14, [x10], #1
++	lsr		w14, w11, #16
++	strb	w14, [x10], #1
++	subs	x13, x13, #1
++	b.ne	1b
++	subs	x12, x12, #1
++	b.ne	2b
++	dsb		sy
++#endif
+ #endif
+ 
+ #if defined(SWEET)
+@@ -865,6 +1036,25 @@
+ 	// Enable caches, MMU, ROP and JOP
+ 	MOV64   x0, SCTLR_EL1_DEFAULT
+ 	MSR_SCTLR_EL1_X0
++#if defined(BOARD_UGGLITE)
++	/* marker 9: 0x00ff00 */
++	movz	x10, #0x9004, lsl #16
++	movk	x10, #0xbf00
++	movz	w11, #0x0, lsl #16
++	movk	w11, #0xff00
++	mov		x12, #16
++2:	mov		x13, #720
++1:	strb	w11, [x10], #1
++	lsr		w14, w11, #8
++	strb	w14, [x10], #1
++	lsr		w14, w11, #16
++	strb	w14, [x10], #1
++	subs	x13, x13, #1
++	b.ne	1b
++	subs	x12, x12, #1
++	b.ne	2b
++	dsb		sy
++#endif
+ 	isb		sy
+ 
+ #if !VMAPPLE && !defined(SWEET)
