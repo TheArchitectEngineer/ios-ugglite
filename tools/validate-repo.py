@@ -47,18 +47,21 @@ def check_hunk_counts(path):
             if t.startswith('--- ') and j + 1 < len(lines) and lines[j + 1].startswith('+++ '):
                 break
             if t == '':
-                # A blank line is only context inside a hunk; if the next
-                # non-blank line starts a new file, it is a separator.
+                # A blank line is only context inside a hunk. If the next
+                # non-blank line is git metadata or a new file, it separates.
                 k = j + 1
                 while k < len(lines) and lines[k] == '':
                     k += 1
-                if k >= len(lines) or lines[k].startswith('diff --git'):
+                if (k >= len(lines) or lines[k].startswith('diff --git')
+                        or lines[k].startswith('index ')
+                        or lines[k].startswith('--- a/')
+                        or lines[k].startswith('new file mode')):
                     break
                 old += 1; new += 1
             elif t.startswith(' '):
                 old += 1; new += 1
-            elif t.startswith('#') or t.startswith('\t'):
-                # Unprefixed source line: the hunk body ended early.
+            elif t.startswith('#') or t.startswith('\t') or t.startswith('index '):
+                # Unprefixed source line or git metadata: hunk body ended.
                 break
             elif t.startswith('-'):
                 old += 1

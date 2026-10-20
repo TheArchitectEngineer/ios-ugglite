@@ -2,7 +2,76 @@
 
 ## Agent handoff / active work (2026-10-15, latest)
 
-### >>> UPDATE 2026-10-20 (read first): second target, Redmi Note 5A "ugglite" <<<
+### >>> UPDATE 2026-10-20 (latest): ugglite kernel builds; XNU executes start.s and hangs <<<
+
+**Read this first. The state below supersedes the earlier 10-20 section.**
+
+**Where the port actually is:** the ugglite XNU kernel builds in CI and boots on
+the phone. The shim runs, hands off correctly, and **XNU executes its first
+instructions** - the panel turns solid white from the stage-0 marker in
+`start.s`. It then hangs inside `start.s`, before any C code and before the
+early console can print.
+
+**How that was established (the diagnostic ladder that finally worked):**
+1. Probe screen proved the shim runs and reads the hardware correctly.
+2. A read-back of the entry word (`WROTE` vs `EXPECT` on screen) proved the
+   payload is copied correctly into RAM - same value - so the kernel bytes are
+   where they should be.
+3. A magenta bar painted by the shim immediately *before* the call, and a green
+   bar painted immediately *after* it, separate the three outcomes:
+   - no bar: the shim never reached the call
+   - magenta only: XNU was entered and never returned
+   - green: XNU returned or faulted back
+   **Result: solid white (XNU's own stage-0 fill), no green** - XNU is entered
+   and hangs.
+
+**Two real bugs fixed today, both of which had made every previous boot look
+identical (shim prints JUMP, screen never changes):**
+
+1. **`OSLAR_EL1` is an Apple Silicon register.** `start_first_cpu` opened with
+   `msr OSLAR_EL1, xzr`; on a Cortex-A53 that is UNDEFINED, so XNU raised a
+   synchronous exception on its *first instruction*. Both sites
+   (`reset_vector`, `start_first_cpu`) are now `#if !defined(SWEET)`. Confirmed
+   in the disassembly: the first instruction is now `msr DAIFSet, #0xf`.
+   This was the single blocker behind every "JUMP then nothing" observation.
+
+2. **`BOARD_UGGLITE` was never defined.** The machine config defined
+   `ARM64_BOARD_CONFIG_UGGLITE` and `UGG_FAMILY`, but the early-console code
+   tests `BOARD_UGGLITE`, so for five builds every board conditional silently
+   took the *sweet* branch - including the framebuffer address (still
+   `0x9c000000`) and the 24 bpp pixel path. Found by disassembling the built
+   kernel and seeing `movk x0, #0x9c00`. `MACHINE_FLAGS_ARM64_UGGLITE` now
+   carries `-DBOARD_UGGLITE`. After the fix the disassembly shows
+   `movk x0, #0x9000`, 1280 rows, 2160 stride, 720 pixels - correct.
+
+**Where it hangs now:** inside `start.s`, after the stage-0 fill and after
+`VBAR_EL1` is set, during the bootstrap page-table construction. The loop at
+`0xfffffe0007428230` builds L1/L2 entries from `_mh_execute_header` to the end
+of memory. The likely mismatch is between what `start.s` assumes about the
+memory map and what our ADT describes: a flat 688 MiB region at
+`0x8d500000`, whereas Apple's boot path assumes the kernel sits at
+`VM_KERNEL_LINK_ADDRESS` with a slide and that memory extends to a
+bootloader-reported end.
+
+Note `MH_DYLIB_IN_CACHE` is **not** set in our kernel and the first load
+command *is* `LC_SEGMENT_64`, so the slide-rebase path is skipped - that
+self-loop (`bne .` at `0xfffffe00074281d4`) is not the one being hit.
+
+**NEXT CONCRETE ACTION:** work out what `start.s` computes for the bootstrap
+mapping and compare it against the ADT. The useful inputs are
+`VM_KERNEL_LINK_ADDRESS`, `boot_args->memSize`, `physBase`, `topOfKernelData`
+and `_mh_execute_header`. Two candidate fixes to evaluate: (a) make the ADT's
+`dram-base`/`dram-size` describe the region the way `start.s` expects rather
+than our "usable RAM after the carve-outs" view, or (b) add a `#if
+defined(BOARD_UGGLITE)` path that maps exactly the kernel image plus a fixed
+window instead of walking to the end of memory.
+
+**Everything else still stands** from the sections below: 16K granule absent
+(hardware fact, measured), GICv2 driver written, 4K page handling in place,
+SMP IPI fixed for GICv2 (patch 0083), ramdisk delivery solved by embedding the
+payload in the compressed kernel.
+
+### >>> UPDATE 2026-10-20: second target, Redmi Note 5A "ugglite" <<<
 
 The user asked whether this project can be retargeted from sweet (SM7150) to the
 **Redmi Note 5A / ugglite (MSM8917 + PM8937, 4x Cortex-A53)**, the phone they

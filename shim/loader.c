@@ -181,16 +181,52 @@ const char *loader_boot(uintptr_t dtb)
 	 * start.s reprograms the MMU from scratch, so the mapping only has to
 	 * be sane for the first few instructions.
 	 */
-	{
-		struct mmu_info mi;
-		uintptr_t lo = p->phys_base & ~0x3ffUL;
-		uintptr_t hi = (p->phys_base + p->mem_size + 0x3ffUL) & ~0x3ffUL;
-
-		mmu_enable_range(&mi, lo, hi);
-	}
-
+	/*
+	 * Leave the MMU OFF, as on sweet. The previous attempt to enter with it
+	 * on was a hypothesis that did not help, and it also risked unmapping
+	 * the shim's own code mid-flight.
+	 */
 	__asm__ volatile("dsb sy; ic iallu; dsb sy; isb" ::: "memory");
+
+	/*
+	 * Paint a distinctive bar into the framebuffer from the shim, then call
+	 * XNU. If the bar appears but XNU's stage-0 fill does not, execution
+	 * reached the call and died inside XNU; if the bar does not appear, the
+	 * shim never got this far.
+	 */
+	{
+		volatile uint8_t *fb = (volatile uint8_t *)FB_PHYS;
+		for (int y = 0; y < 8; y++)
+			for (int x = 0; x < FB_W; x++) {
+				volatile uint8_t *p2 = fb + (uintptr_t)(FB_H - 16 + y) * FB_STRIDE
+				    + (uintptr_t)x * FB_BPP;
+#if FB_BPP == 4
+				*(volatile uint32_t *)p2 = 0xff00ffffu;
+#else
+				p2[0] = 0xff; p2[1] = 0x00; p2[2] = 0xff;
+#endif
+			}
+	}
 	((xnu_entry_t)entry_pa)(ba_pa);
+
+	/*
+	 * Reached only if XNU returns (it should never) or if the call faults
+	 * back into the shim. Paint green over the bottom of the panel so the
+	 * difference from a hang is visible on screen.
+	 */
+	{
+		volatile uint8_t *fb = (volatile uint8_t *)FB_PHYS;
+		for (int y = 0; y < 32; y++)
+			for (int x = 0; x < FB_W; x++) {
+				volatile uint8_t *q = fb + (uintptr_t)(FB_H - 48 + y) * FB_STRIDE
+				    + (uintptr_t)x * FB_BPP;
+#if FB_BPP == 4
+				*(volatile uint32_t *)q = 0xff00ff00u;
+#else
+				q[0] = 0x00; q[1] = 0xff; q[2] = 0x00;
+#endif
+			}
+	}
 	return "xnu returned";
 }
 
