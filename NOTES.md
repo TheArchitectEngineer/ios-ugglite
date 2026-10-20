@@ -16,24 +16,27 @@ re-observed in this session:
 - The early console's byte addressing, 24-bpp pixel path and panel geometry
   (720x1280, 2160-byte stride, physical framebuffer `0x90000000`) are verified.
 
-**Current fix:** build 27 set `UGG_EARLY_FB` to `0xfffffe0017000000`, which
-maps to PA `0x9d500000`, not the panel. The `start.s` V=P bootstrap mapping
-is identity for this setup; drawing must use `0x90000000`. The working-tree
-patch corrects the address and removes the stale contradictory comment.
-`python3 tools/validate-repo.py` passed before commit (84 patches validated).
+**Fix committed and built:** commit `15e1497` sets `UGG_EARLY_FB` to
+`0x90000000`, correcting build 27's `0xfffffe0017000000` (which maps to PA
+`0x9d500000`) and removing the stale contradictory comment. Repository
+validation passed (84 patches validated). GitHub Actions run `39402408243`
+used the exact commit SHA `15e1497fdac8626056026d1a2f59cd2f0ea79776` and
+completed successfully on 2026-10-20 09:49:30 UTC.
 
-**Next action:** commit the correction and this handoff, then dispatch:
+The run's `xnu-kernel` artifact is in `xnu/out-0082`. Its SHA256 manifest
+passes; `kernel.development.ugglite` is a 16,799,832-byte arm64 Mach-O with
+SHA256 `421119cedbf1ec90cee3eaa0a6337af4de53083b48a3a3aec146b9605d85fd33`.
+Disassembly/data inspection confirms the early framebuffer pointer initializes
+to `0x90000000`; the marker path compiles for 720x1280 with a 2160-byte stride.
 
-`gh workflow run xnu.yml -R cuwayo/ios-ugglite -f machine_config=UGGLITE -f keep_going=true`
-
-Record the commit, CI run ID and exact build result here. Download the
-`xnu-kernel` artifact to `xnu/out-0082` and verify the compiled framebuffer
-constant in disassembly before a temporary `fastboot boot`. Expected screen:
-solid green at `arm_init` entry.
+**Next action:** temporarily `fastboot boot` the rebuilt image and verify the
+panel becomes solid green at `arm_init` entry. The current build has not yet
+been tested on hardware. Do not flash partitions.
 
 After solid green, continue the marker ladder through `PE_init_platform`,
-`ml_parse_cpu_topology`, `arm_vm_init` and `serial_init`; then proceed to UFS
-root and GICv2 interrupts. Do not modify device partitions during bring-up.
+`ml_parse_cpu_topology`, `arm_vm_init` and `serial_init`; then validate GICv2
+interrupts and add eMMC/SDHCI root support. Ugglite uses eMMC, not UFS. Do not
+modify device partitions during bring-up.
 
 ### Historical handoff (superseded by the active status above)
 
