@@ -8,6 +8,43 @@ The project goal is to boot iOS on the Redmi Note 5A (`ugglite`). The phone is
 now executing the temporary 0085 diagnostic image after an ADB reboot from
 Android. Use temporary `fastboot boot` images only; do not flash partitions.
 
+**0087 BUILT AND BOOTED, PANEL OBSERVATION PENDING (2026-10-20 11:36 UTC).**
+CI run `39414768943` (commit `f81cf0f`, dispatch, `MACHINE_CONFIG=UGGLITE`)
+completed **success** at 11:24:50 UTC, 7m18s. Artifact downloaded to
+`xnu/out-0087/kernel.development.ugglite`, 16,816,2xx bytes, SHA256
+`d7bf66bd803158f652f5b786985ea70c0ccd0d6313048818545741632b007807`; its
+`SHA256SUMS` matches. The CI log confirms patches 0086 and 0087 were applied.
+
+Static verification of the 0087 binary (all read from the artifact, not
+assumed): `sysreg_restore.tcr_el1` = **`0x00000022a5172517`**, i.e. T0SZ=23,
+T1SZ=23, TG0=TG1=4K, IPS=2 (40-bit). `_start_first_cpu` builds V=P L0 at
+`bootstrap_pagetables+0x0000` (page 0), V=P L1 page 1, KVA L0 page 2, KVA L1
+page 3, then L2 pages from page 4; the framebuffer's ten 2 MiB entries go into
+`x25 + 4*PGBYTES` (page 4), and `TTBR1_EL1` is loaded from `x25 + 2*PGBYTES`
+(page 2). Disassembly of the marker ladder (row = (PA-0x90000000)/2160):
+row 0 magenta, 16 cyan, 32 yellow, 48 blue, 64 green, 80 red, 96 black,
+112 red, 128 blue (after TTBR0), 144 green (after TTBR1+MAIR+TCR+TLBI),
+**160 yellow (post-MMU, after `MSR SCTLR_EL1` + `ISB`)**, then `arm_init`.
+
+Payload `shim/out/payload-0087.bin` (16,201,232 bytes, SHA256
+`1e1cf63a4da3af0ec8013a6f03636fc86dba257e9bd93c918590d47316976ab2`) was built
+from that kernel and `shim/out/ugglite-0087.adt` (regenerated with
+`--ugglite`; differs from the 0085 ADT only in the random seed) with
+`debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress`.
+
+Test image `shim/out/shim-boot-0087-l0.img`, 22,249,472 bytes, SHA256
+`fe3b996fca4b4a16f8dd92e71bfa1725d78a3a34ec46a0fac68d021d513678dd`.
+Verified by unpacking: header v0, 2048-byte pages, ramdisk byte-matches the
+payload, gzip payload decompresses to 16,397,840 bytes with `SWEETXNU` at
+offset 0x30000 and the payload byte-identical through the tail.
+
+`fastboot -s 444fe4c1 boot shim-boot-0087-l0.img` at 11:36 UTC returned
+`Sending ... OKAY` (0.684 s) and `Booting ... OKAY` (0.362 s). The phone then
+dropped off USB (no adb, no fastboot), which is the expected signature of our
+kernel running. **What is not yet known: whether row 160 (yellow) or the
+solid-green `arm_init` fill appeared.** The user's panel observation is the
+gate; do not record the MMU fix as working until it is reported.
+
 **Hardware test initiated (2026-10-20 11:09:06 UTC):** the phone was visible
 over ADB as serial `444fe4c1`, product `lineage_Mi8937_4_19`, model
 `Redmi_Note_5A`, device `ugglite`. `adb -s 444fe4c1 reboot bootloader` exposed
